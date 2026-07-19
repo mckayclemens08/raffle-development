@@ -1,0 +1,8 @@
+{
+  "name": "decentralized-lottery",
+  "private": true,
+  "workspaces": [
+    "contracts",
+    "web"
+  ]
+}
