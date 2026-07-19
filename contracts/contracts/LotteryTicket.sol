@@ -3,6 +3,8 @@ pragma solidity ^0.8.28;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
@@ -10,10 +12,14 @@ import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/inter
 
 /// @title LotteryTicket
 /// @notice Monthly raffle where ticket price rises with demand within a round.
-/// Winning ticket is chosen via Chainlink VRF; whoever holds the NFT at draw
-/// time (tickets are transferable, see TicketMarket) wins the pool.
+/// Tickets are paid for in a stablecoin (USDC); prices use the token's native
+/// decimals (6 for USDC). Winning ticket is chosen via Chainlink VRF; whoever
+/// holds the NFT at draw time (tickets are transferable, see TicketMarket)
+/// wins the pool.
 /// @dev ERC721Enumerable lets the frontend list a wallet's tickets without an indexer.
 contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsumerBaseV2 {
+    using SafeERC20 for IERC20;
+
     uint256 public constant PLATFORM_FEE_BPS = 500; // 5%
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
@@ -29,6 +35,7 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
         bool paid;
     }
 
+    IERC20 public immutable paymentToken;
     uint256 public basePrice;
     uint256 public priceIncrement;
     uint256 public roundDuration;
@@ -54,6 +61,7 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
     constructor(
         address initialOwner,
         address _vrfCoordinator,
+        address _paymentToken,
         bytes32 _keyHash,
         uint64 _vrfSubscriptionId,
         uint256 _basePrice,
@@ -65,6 +73,8 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
         Ownable(initialOwner)
         VRFConsumerBaseV2(_vrfCoordinator)
     {
+        require(_paymentToken != address(0), "zero payment token");
+        paymentToken = IERC20(_paymentToken);
         vrfCoordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
         keyHash = _keyHash;
         vrfSubscriptionId = _vrfSubscriptionId;
@@ -85,16 +95,20 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
         return basePrice + (rounds[roundId].ticketsSold * priceIncrement);
     }
 
-    function buyTicket() external payable nonReentrant returns (uint256 ticketId) {
+    /// @param maxPrice Cap on what the buyer is willing to pay — protects against
+    /// the price rising between quoting and the transaction landing.
+    function buyTicket(uint256 maxPrice) external nonReentrant returns (uint256 ticketId) {
         Round storage round = rounds[currentRound];
         require(block.timestamp < round.endTime, "round closed");
 
         uint256 price = getCurrentPrice(currentRound);
-        require(msg.value == price, "incorrect payment");
+        require(price <= maxPrice, "price exceeds maxPrice");
 
         ticketId = _nextTicketId++;
         round.ticketsSold += 1;
-        round.pool += msg.value;
+        round.pool += price;
+
+        paymentToken.safeTransferFrom(msg.sender, address(this), price);
 
         _safeMint(msg.sender, ticketId);
         emit TicketPurchased(currentRound, ticketId, msg.sender, price);
@@ -145,10 +159,8 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
         uint256 fee = (round.pool * PLATFORM_FEE_BPS) / BPS_DENOMINATOR;
         uint256 payout = round.pool - fee;
 
-        (bool feeSent, ) = feeRecipient.call{value: fee}("");
-        require(feeSent, "fee transfer failed");
-        (bool paidSent, ) = winner.call{value: payout}("");
-        require(paidSent, "payout transfer failed");
+        paymentToken.safeTransfer(feeRecipient, fee);
+        paymentToken.safeTransfer(winner, payout);
 
         emit PrizeClaimed(roundId, winner, payout, fee);
     }

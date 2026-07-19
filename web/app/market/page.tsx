@@ -1,10 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { formatEther, parseEther } from "viem";
 import { useAccount } from "wagmi";
-import { useBuyListing, useListTicket, useMarketListings, useMyTickets } from "@/lib/hooks";
-import { LOTTERY_ADDRESS, MARKET_ADDRESS } from "@/lib/contracts";
+import { useBuyListing, useListTicket, useMarketListings, useMyTickets, useUsdc } from "@/lib/hooks";
+import { formatUsdc, parseUsdc, LOTTERY_ADDRESS, MARKET_ADDRESS } from "@/lib/contracts";
 
 function ListTicketForm() {
   const { ticketIds } = useMyTickets();
@@ -32,7 +31,7 @@ function ListTicketForm() {
         </select>
         <input
           className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900"
-          placeholder="Price in ETH"
+          placeholder="Price in USD"
           value={price}
           onChange={(e) => setPrice(e.target.value)}
         />
@@ -46,7 +45,7 @@ function ListTicketForm() {
         <button
           className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
           disabled={!ticketId || !price || isPending || isConfirming}
-          onClick={() => listTicket(BigInt(ticketId), parseEther(price))}
+          onClick={() => listTicket(BigInt(ticketId), parseUsdc(price))}
         >
           2. List
         </button>
@@ -60,6 +59,7 @@ export default function MarketPage() {
   const { isConnected } = useAccount();
   const { listings, refetch } = useMarketListings();
   const { buyListing, isPending, isConfirming, isSuccess } = useBuyListing();
+  const usdc = useUsdc(MARKET_ADDRESS);
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(
@@ -96,8 +96,8 @@ export default function MarketPage() {
         </button>
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-xl border border-neutral-200">
-        <table className="w-full text-left text-sm">
+      <div className="mt-4 overflow-x-auto rounded-xl border border-neutral-200">
+        <table className="w-full min-w-[480px] text-left text-sm">
           <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
             <tr>
               <th className="px-4 py-3 font-medium">Ticket</th>
@@ -120,14 +120,24 @@ export default function MarketPage() {
                   <td className="px-4 py-3 text-neutral-500">
                     {listing.seller.slice(0, 6)}…{listing.seller.slice(-4)}
                   </td>
-                  <td className="px-4 py-3 font-medium">{formatEther(listing.price)} ETH</td>
+                  <td className="px-4 py-3 font-medium">${formatUsdc(listing.price)}</td>
                   <td className="px-4 py-3 text-right">
                     <button
                       className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-                      disabled={!isConnected || isPending || isConfirming}
-                      onClick={() => buyListing(listing.ticketId, listing.price)}
+                      disabled={!isConnected || isPending || isConfirming || usdc.isApproving}
+                      onClick={() => {
+                        if (usdc.allowance !== undefined && usdc.allowance < listing.price) {
+                          usdc.approve(listing.price);
+                        } else {
+                          buyListing(listing.ticketId);
+                        }
+                      }}
                     >
-                      Buy
+                      {usdc.allowance !== undefined && usdc.allowance < listing.price
+                        ? usdc.isApproving
+                          ? "Approving…"
+                          : "Approve USDC"
+                        : "Buy"}
                     </button>
                   </td>
                 </tr>

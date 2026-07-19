@@ -2,16 +2,23 @@
 pragma solidity ^0.8.28;
 
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title TicketMarket
-/// @notice Secondary marketplace for reselling LotteryTicket NFTs before a round is drawn.
+/// @notice Secondary marketplace for reselling LotteryTicket NFTs before a round
+/// is drawn. Sales settle in the same stablecoin (USDC) the raffle uses; listing
+/// prices use the token's native decimals (6 for USDC).
 contract TicketMarket is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     uint256 public constant PLATFORM_FEE_BPS = 200; // 2%
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
     IERC721 public immutable ticketContract;
+    IERC20 public immutable paymentToken;
     address public feeRecipient;
 
     struct Listing {
@@ -26,8 +33,15 @@ contract TicketMarket is Ownable, ReentrancyGuard {
     event ListingCancelled(uint256 indexed ticketId, address indexed seller);
     event TicketSold(uint256 indexed ticketId, address indexed seller, address indexed buyer, uint256 price, uint256 fee);
 
-    constructor(address initialOwner, address _ticketContract, address _feeRecipient) Ownable(initialOwner) {
+    constructor(
+        address initialOwner,
+        address _ticketContract,
+        address _paymentToken,
+        address _feeRecipient
+    ) Ownable(initialOwner) {
+        require(_paymentToken != address(0), "zero payment token");
         ticketContract = IERC721(_ticketContract);
+        paymentToken = IERC20(_paymentToken);
         feeRecipient = _feeRecipient;
     }
 
@@ -53,10 +67,9 @@ contract TicketMarket is Ownable, ReentrancyGuard {
         emit ListingCancelled(ticketId, msg.sender);
     }
 
-    function buyTicket(uint256 ticketId) external payable nonReentrant {
+    function buyTicket(uint256 ticketId) external nonReentrant {
         Listing storage listing = listings[ticketId];
         require(listing.active, "not listed");
-        require(msg.value == listing.price, "incorrect payment");
         require(ticketContract.ownerOf(ticketId) == listing.seller, "seller no longer owns ticket");
 
         address seller = listing.seller;
@@ -68,10 +81,8 @@ contract TicketMarket is Ownable, ReentrancyGuard {
 
         ticketContract.safeTransferFrom(seller, msg.sender, ticketId);
 
-        (bool feeSent, ) = feeRecipient.call{value: fee}("");
-        require(feeSent, "fee transfer failed");
-        (bool sellerSent, ) = seller.call{value: sellerProceeds}("");
-        require(sellerSent, "seller transfer failed");
+        paymentToken.safeTransferFrom(msg.sender, feeRecipient, fee);
+        paymentToken.safeTransferFrom(msg.sender, seller, sellerProceeds);
 
         emit TicketSold(ticketId, seller, msg.sender, price, fee);
     }

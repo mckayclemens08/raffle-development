@@ -4,8 +4,10 @@ export const BASE_FEE = 100_000_000_000_000_00n; // 0.1 LINK
 export const GAS_PRICE_LINK = 1_000_000_000n; // 1 gwei
 export const KEY_HASH = ethers.keccak256(ethers.toUtf8Bytes("test-key-hash"));
 
-export const BASE_PRICE = ethers.parseEther("0.01");
-export const PRICE_INCREMENT = ethers.parseEther("0.001");
+// USDC uses 6 decimals: 10 USDC base price, 1 USDC increment.
+export const USDC = (n: number) => BigInt(Math.round(n * 1_000_000));
+export const BASE_PRICE = USDC(10);
+export const PRICE_INCREMENT = USDC(1);
 export const ROUND_DURATION = 30 * 24 * 60 * 60; // 30 days
 
 export async function deployVrfCoordinator() {
@@ -32,14 +34,23 @@ export async function createFundedSubscription(coordinator: any) {
   return subId;
 }
 
+export async function deployUsdc() {
+  const MockUSDC = await ethers.getContractFactory("MockUSDC");
+  const usdc = await MockUSDC.deploy();
+  await usdc.waitForDeployment();
+  return usdc;
+}
+
 export async function deployLottery(deployerAddress: string, feeRecipient: string) {
   const coordinator = await deployVrfCoordinator();
   const subId = await createFundedSubscription(coordinator);
+  const usdc = await deployUsdc();
 
   const LotteryTicket = await ethers.getContractFactory("LotteryTicket");
   const lottery = await LotteryTicket.deploy(
     deployerAddress,
     await coordinator.getAddress(),
+    await usdc.getAddress(),
     KEY_HASH,
     subId,
     BASE_PRICE,
@@ -51,5 +62,11 @@ export async function deployLottery(deployerAddress: string, feeRecipient: strin
 
   await coordinator.addConsumer(subId, await lottery.getAddress());
 
-  return { coordinator, subId, lottery };
+  return { coordinator, subId, usdc, lottery };
+}
+
+/// Mints USDC to a signer and approves the spender for that amount.
+export async function fundAndApprove(usdc: any, signer: any, spender: string, amount: bigint) {
+  await usdc.mint(signer.address, amount);
+  await usdc.connect(signer).approve(spender, amount);
 }

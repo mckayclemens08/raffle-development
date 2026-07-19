@@ -20,21 +20,36 @@ const NAV_LINKS = [
 
 export function Header() {
   return (
-    <header className="flex items-center justify-between border-b border-neutral-200 px-6 py-3">
-      <div className="flex items-center gap-8">
-        <Link href="/" className="flex items-center gap-2">
+    <header className="border-b border-neutral-200 px-4 py-3 sm:px-6">
+      <div className="flex items-center justify-between gap-3">
+        <Link href="/" className="flex min-w-0 items-center gap-2">
           <Logo />
-          <span className="text-lg font-bold tracking-tight text-neutral-900">Decentralized Lottery</span>
+          <span className="truncate text-base font-bold tracking-tight text-neutral-900 sm:text-lg">
+            Decentralized Lottery
+          </span>
         </Link>
-        <nav className="flex items-center gap-6 text-sm font-medium text-neutral-500">
+
+        {/* Desktop nav sits inline; on mobile it moves to its own row below. */}
+        <nav className="hidden items-center gap-6 text-sm font-medium text-neutral-500 md:flex">
           {NAV_LINKS.map((link) => (
             <Link key={link.href} href={link.href} className="transition hover:text-neutral-900">
               {link.label}
             </Link>
           ))}
         </nav>
+
+        <div className="shrink-0">
+          <ConnectButton accountStatus={{ smallScreen: "avatar", largeScreen: "full" }} showBalance={{ smallScreen: false, largeScreen: true }} />
+        </div>
       </div>
-      <ConnectButton />
+
+      <nav className="mt-3 flex items-center gap-6 overflow-x-auto text-sm font-medium text-neutral-500 md:hidden">
+        {NAV_LINKS.map((link) => (
+          <Link key={link.href} href={link.href} className="whitespace-nowrap transition hover:text-neutral-900">
+            {link.label}
+          </Link>
+        ))}
+      </nav>
     </header>
   );
 }

@@ -1,9 +1,8 @@
 "use client";
 
-import { formatEther } from "viem";
 import { useAccount } from "wagmi";
-import { useBuyTicket, useCurrentRound } from "@/lib/hooks";
-import { LOTTERY_ADDRESS } from "@/lib/contracts";
+import { useBuyTicket, useCurrentRound, useUsdc } from "@/lib/hooks";
+import { formatUsdc, LOTTERY_ADDRESS } from "@/lib/contracts";
 
 function Countdown({ endTime }: { endTime: bigint }) {
   const endMs = Number(endTime) * 1000;
@@ -43,6 +42,12 @@ export default function Home() {
   const { isConnected } = useAccount();
   const { roundId, round, price, refetch } = useCurrentRound();
   const { buyTicket, isPending, isConfirming, isSuccess, error } = useBuyTicket();
+  const usdc = useUsdc(LOTTERY_ADDRESS);
+
+  const needsApproval =
+    price !== undefined && usdc.allowance !== undefined && usdc.allowance < price;
+  const insufficientBalance =
+    price !== undefined && usdc.balance !== undefined && usdc.balance < price;
 
   return (
     <>
@@ -96,7 +101,7 @@ export default function Home() {
                   </div>
                   <div>
                     <p className="text-neutral-500">Prize pool</p>
-                    <p className="font-semibold">{round ? `${formatEther(round.pool)} ETH` : "—"}</p>
+                    <p className="font-semibold">{round ? `$${formatUsdc(round.pool)}` : "—"}</p>
                   </div>
                 </div>
 
@@ -112,27 +117,61 @@ export default function Home() {
 
                 <button
                   className="mt-6 w-full rounded-xl bg-blue-600 px-4 py-3.5 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!isConnected || price === undefined || isPending || isConfirming}
-                  onClick={() => price !== undefined && buyTicket(price)}
+                  disabled={
+                    !isConnected ||
+                    price === undefined ||
+                    insufficientBalance ||
+                    isPending ||
+                    isConfirming ||
+                    usdc.isApproving
+                  }
+                  onClick={() => {
+                    if (price === undefined) return;
+                    if (needsApproval) {
+                      usdc.approve(price);
+                    } else {
+                      buyTicket(price);
+                    }
+                  }}
                 >
                   {!isConnected
                     ? "Connect wallet to buy a ticket"
-                    : isPending || isConfirming
-                      ? "Confirming…"
-                      : price !== undefined
-                        ? `Buy ticket for ${formatEther(price)} ETH`
-                        : "Loading…"}
+                    : price === undefined
+                      ? "Loading…"
+                      : insufficientBalance
+                        ? "Insufficient USDC balance"
+                        : usdc.isApproving
+                          ? "Approving USDC…"
+                          : isPending || isConfirming
+                            ? "Confirming…"
+                            : needsApproval
+                              ? `Approve $${formatUsdc(price)} USDC`
+                              : `Buy ticket for $${formatUsdc(price)}`}
                 </button>
+                {needsApproval && !usdc.isApproving && (
+                  <p className="mt-2 text-center text-xs text-neutral-400">
+                    First-time purchase takes two steps: approve USDC, then buy.
+                  </p>
+                )}
 
                 {isSuccess && (
                   <p className="mt-3 text-center text-sm text-emerald-600">
                     Ticket purchased!{" "}
-                    <button className="underline" onClick={() => refetch()}>
+                    <button
+                      className="underline"
+                      onClick={() => {
+                        refetch();
+                        usdc.refetch();
+                      }}
+                    >
                       Refresh
                     </button>
                   </p>
                 )}
                 {error && <p className="mt-3 text-center text-sm text-red-600">{error.message}</p>}
+                {usdc.approveError && (
+                  <p className="mt-3 text-center text-sm text-red-600">{usdc.approveError.message}</p>
+                )}
               </>
             )}
           </div>
