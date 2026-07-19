@@ -5,7 +5,8 @@ import { useAccount } from "wagmi";
 import { useBuyTicket, useCurrentRound, useUsdc } from "@/lib/hooks";
 import { useRoundActivity } from "@/lib/useRoundActivity";
 import { formatUsdc, LOTTERY_ADDRESS } from "@/lib/contracts";
-import { StepAreaChart, type ChartPoint } from "@/components/StepAreaChart";
+import { LiveChartCard } from "@/components/LiveChartCard";
+import { type ChartPoint } from "@/components/LineAreaChart";
 
 function formatAxisUsd(value: number): string {
   if (value >= 1000) {
@@ -200,20 +201,14 @@ export default function Home() {
 
       {LOTTERY_ADDRESS && (
         <section className="mx-auto max-w-6xl px-6 pt-16">
-          <div className="rounded-xl border border-neutral-200 p-6">
-            <p className="text-sm text-neutral-500">Prize pool this round</p>
-            <p className="mt-1 text-3xl font-semibold text-neutral-900">
-              {round ? `$${formatUsdc(round.pool)}` : "—"}
-            </p>
-            <div className="mt-4">
-              <StepAreaChart
-                points={poolPoints}
-                formatValue={formatAxisUsd}
-                emptyLabel="The pool chart appears once the round opens."
-                ariaLabel="Prize pool over time for the current raffle round"
-              />
-            </div>
-          </div>
+          <LiveChartCard
+            label="Prize pool this round"
+            value={round ? `$${formatUsdc(round.pool)}` : "—"}
+            points={poolPoints}
+            formatValue={formatAxisUsd}
+            emptyLabel="The pool chart appears once the round opens."
+            ariaLabel="Prize pool over time for the current raffle round"
+          />
         </section>
       )}
 

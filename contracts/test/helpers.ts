@@ -4,10 +4,10 @@ export const BASE_FEE = 100_000_000_000_000_00n; // 0.1 LINK
 export const GAS_PRICE_LINK = 1_000_000_000n; // 1 gwei
 export const KEY_HASH = ethers.keccak256(ethers.toUtf8Bytes("test-key-hash"));
 
-// USDC uses 6 decimals: 10 USDC base price, 1 USDC increment.
+// USDC uses 6 decimals: $10 base price, $0.50 increment per ticket sold.
 export const USDC = (n: number) => BigInt(Math.round(n * 1_000_000));
 export const BASE_PRICE = USDC(10);
-export const PRICE_INCREMENT = USDC(1);
+export const PRICE_INCREMENT = USDC(0.5);
 export const ROUND_DURATION = 30 * 24 * 60 * 60; // 30 days
 
 export async function deployVrfCoordinator() {

@@ -17,7 +17,7 @@ export interface ChartPoint {
   value: number;
 }
 
-interface StepAreaChartProps {
+interface LineAreaChartProps {
   points: ChartPoint[];
   /** Extends the last value flat to "now" so the line reads as current. */
   extendToNow?: boolean;
@@ -47,16 +47,15 @@ function formatClock(ts: number): string {
 }
 
 const PAD = { top: 14, right: 56, bottom: 22, left: 8 };
-const AXIS_W = 44;
 
-export function StepAreaChart({
+export function LineAreaChart({
   points,
   extendToNow = true,
   height = 180,
   formatValue,
   emptyLabel,
   ariaLabel,
-}: StepAreaChartProps) {
+}: LineAreaChartProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const width = 640; // viewBox units; SVG scales to its container
@@ -85,11 +84,10 @@ export function StepAreaChart({
     const x = (ts: number) => PAD.left + ((ts - t0) / span) * plotW;
     const y = (v: number) => PAD.top + plotH - (v / yMax) * plotH;
 
-    // Step-after path: value holds until the next purchase changes it.
+    // Continuous line through every point, stock-chart style.
     let d = `M ${x(series[0].timestamp)} ${y(series[0].value)}`;
     for (let i = 1; i < series.length; i++) {
-      d += ` H ${x(series[i].timestamp)}`;
-      if (series[i].value !== series[i - 1].value) d += ` V ${y(series[i].value)}`;
+      d += ` L ${x(series[i].timestamp)} ${y(series[i].value)}`;
     }
     const baselineY = PAD.top + plotH;
     const area = `${d} V ${baselineY} H ${x(series[0].timestamp)} Z`;

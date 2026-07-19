@@ -37,7 +37,7 @@ async function main() {
 
   const keyHash = ethers.keccak256(ethers.toUtf8Bytes("local-dev-key-hash"));
   const basePrice = USDC(10);
-  const priceIncrement = USDC(1);
+  const priceIncrement = USDC(0.5);
   const roundDuration = 30 * 24 * 60 * 60;
 
   const LotteryTicket = await ethers.getContractFactory("LotteryTicket");

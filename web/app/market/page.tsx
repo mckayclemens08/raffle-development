@@ -12,7 +12,8 @@ import {
 } from "@/lib/hooks";
 import { useRoundActivity } from "@/lib/useRoundActivity";
 import { formatUsdc, parseUsdc, LOTTERY_ADDRESS, MARKET_ADDRESS } from "@/lib/contracts";
-import { StepAreaChart, type ChartPoint } from "@/components/StepAreaChart";
+import { LiveChartCard } from "@/components/LiveChartCard";
+import { type ChartPoint } from "@/components/LineAreaChart";
 
 function formatAxisUsd(value: number): string {
   if (value >= 1000) {
@@ -108,22 +109,19 @@ export default function MarketPage() {
     <div className="mx-auto max-w-5xl px-6 py-12">
       <h1 className="text-2xl font-bold text-neutral-900">Secondary Market</h1>
       <p className="mt-1 text-sm text-neutral-500">
-        Buy and sell raffle tickets before the round is drawn. A 2% fee applies to every sale.
+        Buy and sell raffle tickets before the round is drawn. A 3% fee applies to every sale — 2% to the
+        platform, 1% added straight to the prize pool.
       </p>
 
-      <div className="mt-6 rounded-xl border border-neutral-200 p-6">
-        <p className="text-sm text-neutral-500">Ticket price this round</p>
-        <p className="mt-1 text-3xl font-semibold text-neutral-900">
-          {price !== undefined ? `$${formatUsdc(price)}` : "—"}
-        </p>
-        <div className="mt-4">
-          <StepAreaChart
-            points={pricePoints}
-            formatValue={formatAxisUsd}
-            emptyLabel="The price chart appears once the round opens."
-            ariaLabel="Raffle ticket price over time for the current round"
-          />
-        </div>
+      <div className="mt-6">
+        <LiveChartCard
+          label="Ticket price this round"
+          value={price !== undefined ? `$${formatUsdc(price)}` : "—"}
+          points={pricePoints}
+          formatValue={formatAxisUsd}
+          emptyLabel="The price chart appears once the round opens."
+          ariaLabel="Raffle ticket price over time for the current round"
+        />
       </div>
 
       {isConnected && (

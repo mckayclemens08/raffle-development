@@ -156,7 +156,13 @@
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "fee",
+        "name": "platformFee",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "poolFee",
         "type": "uint256"
       }
     ],
@@ -179,6 +185,19 @@
   {
     "inputs": [],
     "name": "PLATFORM_FEE_BPS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "POOL_FEE_BPS",
     "outputs": [
       {
         "internalType": "uint256",
@@ -326,7 +345,7 @@
     "name": "ticketContract",
     "outputs": [
       {
-        "internalType": "contract IERC721",
+        "internalType": "contract LotteryTicket",
         "name": "",
         "type": "address"
       }

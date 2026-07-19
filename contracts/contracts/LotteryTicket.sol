@@ -54,6 +54,7 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
 
     event RoundStarted(uint256 indexed roundId, uint256 startTime, uint256 endTime);
     event TicketPurchased(uint256 indexed roundId, uint256 indexed ticketId, address indexed buyer, uint256 price);
+    event PoolDonated(uint256 indexed roundId, address indexed from, uint256 amount);
     event DrawRequested(uint256 indexed roundId, uint256 requestId);
     event WinnerDrawn(uint256 indexed roundId, uint256 indexed winnerTicketId, address winner);
     event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 payout, uint256 fee);
@@ -112,6 +113,24 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
 
         _safeMint(msg.sender, ticketId);
         emit TicketPurchased(currentRound, ticketId, msg.sender, price);
+    }
+
+    /// @notice Adds USDC to the current round's prize pool without minting a
+    /// ticket. Used by TicketMarket to route a share of resale fees into the
+    /// pool; open to anyone (a donation only ever benefits ticket holders).
+    /// If the current round has already paid out (between settlement and the
+    /// next round opening), the amount goes to the fee recipient instead so
+    /// funds can never be stranded in a closed round.
+    function donateToPool(uint256 amount) external nonReentrant {
+        require(amount > 0, "zero amount");
+        Round storage round = rounds[currentRound];
+        if (round.paid) {
+            paymentToken.safeTransferFrom(msg.sender, feeRecipient, amount);
+        } else {
+            paymentToken.safeTransferFrom(msg.sender, address(this), amount);
+            round.pool += amount;
+            emit PoolDonated(currentRound, msg.sender, amount);
+        }
     }
 
     /// @notice Permissionless: anyone can trigger the draw once a round's window has closed.

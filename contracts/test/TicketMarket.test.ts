@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { deployLottery, fundAndApprove, BASE_PRICE, USDC } from "./helpers";
 
 describe("TicketMarket", () => {
@@ -33,7 +34,7 @@ describe("TicketMarket", () => {
     await expect(market.connect(seller).listTicket(ticketId, USDC(20))).to.be.revertedWith("market not approved");
   });
 
-  it("lists, sells, and splits proceeds with a 2% platform fee", async () => {
+  it("lists, sells, and splits proceeds 2% platform / 1% pool / 97% seller", async () => {
     const { market, lottery, usdc, feeRecipient, seller, buyer, ticketId } = await setup();
 
     const price = USDC(20);
@@ -48,18 +49,57 @@ describe("TicketMarket", () => {
 
     const feeRecipientBefore = await usdc.balanceOf(feeRecipient.address);
     const sellerBefore = await usdc.balanceOf(seller.address);
+    const roundId = await lottery.currentRound();
+    const poolBefore = (await lottery.rounds(roundId)).pool;
+    const lotteryBalanceBefore = await usdc.balanceOf(await lottery.getAddress());
 
     await market.connect(buyer).buyTicket(ticketId);
 
     expect(await lottery.ownerOf(ticketId)).to.equal(buyer.address);
 
-    const expectedFee = (price * 200n) / 10_000n;
-    const expectedSellerProceeds = price - expectedFee;
+    const expectedPlatformFee = (price * 200n) / 10_000n;
+    const expectedPoolFee = (price * 100n) / 10_000n;
+    const expectedSellerProceeds = price - expectedPlatformFee - expectedPoolFee;
 
-    expect(await usdc.balanceOf(feeRecipient.address)).to.equal(feeRecipientBefore + expectedFee);
+    expect(await usdc.balanceOf(feeRecipient.address)).to.equal(feeRecipientBefore + expectedPlatformFee);
     expect(await usdc.balanceOf(seller.address)).to.equal(sellerBefore + expectedSellerProceeds);
     expect(await usdc.balanceOf(buyer.address)).to.equal(0n);
+    // 1% of the sale landed in the raffle's prize pool (accounting + escrow)
+    expect((await lottery.rounds(roundId)).pool).to.equal(poolBefore + expectedPoolFee);
+    expect(await usdc.balanceOf(await lottery.getAddress())).to.equal(lotteryBalanceBefore + expectedPoolFee);
     expect((await market.listings(ticketId)).active).to.equal(false);
+  });
+
+  it("sends the pool share to the platform when the current round is already settled", async () => {
+    const { market, lottery, usdc, feeRecipient, seller, buyer, ticketId } = await setup();
+
+    // Settle round 1: close it, draw (seller's ticket wins), and claim.
+    await time.increase(30 * 24 * 60 * 60 + 1);
+    await lottery.requestDraw();
+    const requestId = (await lottery.rounds(1)).vrfRequestId;
+    const coordinatorAddress = await lottery.vrfCoordinator();
+    const coordinator = await ethers.getContractAt("VRFCoordinatorV2Mock", coordinatorAddress);
+    await coordinator.fulfillRandomWordsWithOverride(requestId, await lottery.getAddress(), [0n]);
+    await lottery.connect(seller).claimPrize(1);
+
+    // Trade the (now settled) ticket: pool share must fall through to the
+    // platform rather than being stranded in the paid round.
+    const price = USDC(20);
+    await lottery.connect(seller).approve(await market.getAddress(), ticketId);
+    await market.connect(seller).listTicket(ticketId, price);
+    await fundAndApprove(usdc, buyer, await market.getAddress(), price);
+
+    const feeRecipientBefore = await usdc.balanceOf(feeRecipient.address);
+    const lotteryBalanceBefore = await usdc.balanceOf(await lottery.getAddress());
+
+    await market.connect(buyer).buyTicket(ticketId);
+
+    const expectedPlatformFee = (price * 200n) / 10_000n;
+    const expectedPoolFee = (price * 100n) / 10_000n;
+    expect(await usdc.balanceOf(feeRecipient.address)).to.equal(
+      feeRecipientBefore + expectedPlatformFee + expectedPoolFee
+    );
+    expect(await usdc.balanceOf(await lottery.getAddress())).to.equal(lotteryBalanceBefore);
   });
 
   it("rejects buying without sufficient USDC allowance", async () => {
