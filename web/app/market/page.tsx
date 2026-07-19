@@ -2,8 +2,24 @@
 
 import { useMemo, useState } from "react";
 import { useAccount } from "wagmi";
-import { useBuyListing, useListTicket, useMarketListings, useMyTickets, useUsdc } from "@/lib/hooks";
+import {
+  useBuyListing,
+  useCurrentRound,
+  useListTicket,
+  useMarketListings,
+  useMyTickets,
+  useUsdc,
+} from "@/lib/hooks";
+import { useRoundActivity } from "@/lib/useRoundActivity";
 import { formatUsdc, parseUsdc, LOTTERY_ADDRESS, MARKET_ADDRESS } from "@/lib/contracts";
+import { StepAreaChart, type ChartPoint } from "@/components/StepAreaChart";
+
+function formatAxisUsd(value: number): string {
+  if (value >= 1000) {
+    return `$${new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)}`;
+  }
+  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
 
 function ListTicketForm() {
   const { ticketIds } = useMyTickets();
@@ -60,12 +76,29 @@ export default function MarketPage() {
   const { listings, refetch } = useMarketListings();
   const { buyListing, isPending, isConfirming, isSuccess } = useBuyListing();
   const usdc = useUsdc(MARKET_ADDRESS);
+  const { roundId, round, price } = useCurrentRound();
+  const { points } = useRoundActivity(roundId);
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(
     () => listings.filter((listing) => listing.ticketId.toString().includes(search.trim())),
     [listings, search]
   );
+
+  // Primary ticket price over time: each purchase records the price paid, and
+  // the current (next-ticket) price closes out the series. The x-domain starts
+  // at first activity, not round creation, so a quiet lead-in doesn't crush it.
+  const pricePoints = useMemo<ChartPoint[]>(() => {
+    if (!round || price === undefined) return [];
+    const series: ChartPoint[] = points.map((p) => ({ timestamp: p.timestamp, value: Number(p.price) / 1e6 }));
+    const anchorTs = series.length > 0 ? series[0].timestamp - 60 : Number(round.startTime);
+    const anchorValue = series.length > 0 ? series[0].value : Number(price) / 1e6;
+    return [
+      { timestamp: anchorTs, value: anchorValue },
+      ...series,
+      { timestamp: Math.floor(Date.now() / 1000), value: Number(price) / 1e6 },
+    ];
+  }, [round, price, points]);
 
   if (!LOTTERY_ADDRESS || !MARKET_ADDRESS) {
     return <p className="mx-auto max-w-5xl px-6 py-16 text-center text-neutral-500">Contracts not deployed yet.</p>;
@@ -77,6 +110,21 @@ export default function MarketPage() {
       <p className="mt-1 text-sm text-neutral-500">
         Buy and sell raffle tickets before the round is drawn. A 2% fee applies to every sale.
       </p>
+
+      <div className="mt-6 rounded-xl border border-neutral-200 p-6">
+        <p className="text-sm text-neutral-500">Ticket price this round</p>
+        <p className="mt-1 text-3xl font-semibold text-neutral-900">
+          {price !== undefined ? `$${formatUsdc(price)}` : "—"}
+        </p>
+        <div className="mt-4">
+          <StepAreaChart
+            points={pricePoints}
+            formatValue={formatAxisUsd}
+            emptyLabel="The price chart appears once the round opens."
+            ariaLabel="Raffle ticket price over time for the current round"
+          />
+        </div>
+      </div>
 
       {isConnected && (
         <div className="mt-6">

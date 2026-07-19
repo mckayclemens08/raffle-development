@@ -1,8 +1,18 @@
 "use client";
 
+import { useMemo } from "react";
 import { useAccount } from "wagmi";
 import { useBuyTicket, useCurrentRound, useUsdc } from "@/lib/hooks";
+import { useRoundActivity } from "@/lib/useRoundActivity";
 import { formatUsdc, LOTTERY_ADDRESS } from "@/lib/contracts";
+import { StepAreaChart, type ChartPoint } from "@/components/StepAreaChart";
+
+function formatAxisUsd(value: number): string {
+  if (value >= 1000) {
+    return `$${new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)}`;
+  }
+  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
 
 function Countdown({ endTime }: { endTime: bigint }) {
   const endMs = Number(endTime) * 1000;
@@ -43,11 +53,21 @@ export default function Home() {
   const { roundId, round, price, refetch } = useCurrentRound();
   const { buyTicket, isPending, isConfirming, isSuccess, error } = useBuyTicket();
   const usdc = useUsdc(LOTTERY_ADDRESS);
+  const { points } = useRoundActivity(roundId);
 
   const needsApproval =
     price !== undefined && usdc.allowance !== undefined && usdc.allowance < price;
   const insufficientBalance =
     price !== undefined && usdc.balance !== undefined && usdc.balance < price;
+
+  // Pool over time, anchored at $0 shortly before the first sale (like a
+  // prediction-market chart, the x-domain starts at first activity, not at
+  // round creation — otherwise a long quiet lead-in crushes the real data).
+  const poolPoints = useMemo<ChartPoint[]>(() => {
+    if (!round) return [];
+    const anchorTs = points.length > 0 ? points[0].timestamp - 60 : Number(round.startTime);
+    return [{ timestamp: anchorTs, value: 0 }, ...points.map((p) => ({ timestamp: p.timestamp, value: Number(p.pool) / 1e6 }))];
+  }, [round, points]);
 
   return (
     <>
@@ -177,6 +197,25 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {LOTTERY_ADDRESS && (
+        <section className="mx-auto max-w-6xl px-6 pt-16">
+          <div className="rounded-xl border border-neutral-200 p-6">
+            <p className="text-sm text-neutral-500">Prize pool this round</p>
+            <p className="mt-1 text-3xl font-semibold text-neutral-900">
+              {round ? `$${formatUsdc(round.pool)}` : "—"}
+            </p>
+            <div className="mt-4">
+              <StepAreaChart
+                points={poolPoints}
+                formatValue={formatAxisUsd}
+                emptyLabel="The pool chart appears once the round opens."
+                ariaLabel="Prize pool over time for the current raffle round"
+              />
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="mx-auto max-w-6xl px-6 py-16">
         <h2 className="text-2xl font-bold text-neutral-900">How it works</h2>
