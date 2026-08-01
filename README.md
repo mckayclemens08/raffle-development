@@ -16,6 +16,79 @@ than the price they were quoted, even if demand pushes the price up in the same 
 For local dev a `MockUSDC` (mintable by anyone) is deployed and seeded to the first five Hardhat
 accounts. On a real network you'd pass the canonical USDC address for that chain instead.
 
+## Running our own infrastructure
+
+Implementing the dependency proposal: own the plumbing, keep the trust external.
+The principle is that no single supplier should be able to halt the platform, **and** that
+nothing we insource should require players to trust us more than they already do.
+
+### RPC — our node first, hosted as a fallback
+
+Set `NEXT_PUBLIC_RPC_URL` to our own node and `NEXT_PUBLIC_RPC_FALLBACK_URL` to a hosted provider.
+The app uses viem's `fallback` transport, so a rate limit or outage at the hosted endpoint degrades
+instead of taking the site down. With neither set it uses the chain's public default, which is fine
+locally.
+
+### Round scheduling — our keeper, not a keeper network
+
+```bash
+npx hardhat run scripts/keeper.ts --network <net>     # loops; KEEPER_ONCE=true for one pass
+```
+
+It closes rounds, retries a stalled draw once `drawRetryTimeout` has elapsed, and opens the next
+round. **It is a convenience, not a dependency**: `requestDraw` and `sweepUnclaimed` are
+permissionless on-chain, so if the keeper dies, is misconfigured, or the company disappears, any
+player can resolve a round themselves. Only `startNewRound` needs the owner key, and a missed start
+delays new sales rather than trapping money. Don't "improve" this by making the contract depend on it.
+
+### Geolocation — a local database, not a vendor API call per request
+
+`lib/geo.ts` resolves through an ordered chain: a locally held licensed database
+(`GEOIP_DATABASE_PATH`) → CDN/proxy header → dev override. Providers sell the database as a file
+precisely so it can be queried offline; refresh it on a schedule rather than depending on their
+uptime for every player session. Both the `/geo` and `/verify` routes go through the same resolver,
+because two implementations would eventually disagree about jurisdiction.
+
+Install the reader package only once a database is licensed — until then that source is skipped and
+the chain degrades to headers. IP location remains a deterrent, not a control: a VPN defeats it.
+
+### Randomness fallback — no new contract code needed
+
+`setCoordinator` is already owner-callable (inherited from `VRFConsumerBaseV2Plus`), and
+`setVrfConfig` updates the key hash and subscription. So if the primary oracle fails:
+
+1. Wait out `drawRetryTimeout` and retry — most stalls are transient.
+2. If the outage persists, `setCoordinator` to an alternative VRF-compatible coordinator, then
+   `setVrfConfig` for its key hash and subscription.
+3. Call `requestDraw` again — the retry path accepts a new request for the same round.
+
+The draw stays verifiable throughout. We never generate the number ourselves.
+
+### Switching the settlement stablecoin
+
+`paymentToken` is settable on both contracts, guarded so it cannot change while the contract holds
+a balance — a pool is denominated in whatever was paid in, so switching mid-escrow would leave
+prizes owed in one token and payable in another. The procedure:
+
+1. `pause()` the raffle and the market.
+2. Let the open round finish and be claimed, or wait out the claim window and `sweepUnclaimed`.
+3. `withdrawFees()` on both contracts.
+4. `setPaymentToken(newToken)` on the raffle, then the market (it enforces a match with the raffle's).
+5. **Update `NEXT_PUBLIC_USDC_ADDRESS` and redeploy the frontend.** Easy to forget and it fails
+   confusingly: the app would keep asking players to approve the old token, so every purchase
+   reverts on an allowance the contract never sees. The contracts are the source of truth; the
+   frontend has to be told.
+6. `unpause()`.
+
+There is an admin panel for steps 4 and 5 at `/admin` → Settlement token, which surfaces the
+outstanding-fee precondition instead of letting you discover it as a bare revert.
+
+**Why not multiple stablecoins in one pool?** Deliberately not implemented. A pool holding a mix of
+tokens has no single denomination, so a prize can't be stated or paid cleanly, and rounding across
+tokens creates dust that belongs to nobody. Accepting several tokens belongs at the edge — a swap
+before entry — not in the escrow contract. Swapping the settlement token is what actually solves the
+issuer-freeze risk.
+
 ## Player protection & contract safety
 
 Implemented in response to the launch-readiness review:

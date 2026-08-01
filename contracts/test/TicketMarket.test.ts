@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
-import { deployLottery, fundAndApprove, BASE_PRICE, USDC } from "./helpers";
+import { deployLottery, deployUsdc, fundAndApprove, BASE_PRICE, USDC } from "./helpers";
 
 describe("TicketMarket", () => {
   async function setup() {
@@ -133,6 +133,50 @@ describe("TicketMarket", () => {
 
     await fundAndApprove(usdc, buyer, await market.getAddress(), price);
     await expect(market.connect(buyer).buyTicket(ticketId)).to.be.revertedWith("not listed");
+  });
+
+  it("keeps its payment token in step with the raffle's", async () => {
+    const { market, lottery, usdc, seller } = await setup();
+    const other = await deployUsdc();
+
+    // The market can't drift to a token the raffle doesn't settle in, or the
+    // 1% pool share would be unroutable.
+    await expect(market.setPaymentToken(await other.getAddress())).to.be.revertedWith(
+      "must match raffle payment token"
+    );
+
+    // Settle the raffle so its own guard is satisfied: draw, claim, withdraw.
+    const coordinator = await ethers.getContractAt(
+      "MockVRFCoordinatorV2Plus",
+      await lottery.s_vrfCoordinator()
+    );
+    await time.increase(30 * 24 * 60 * 60 + 1);
+    await lottery.requestDraw();
+    const requestId = (await lottery.rounds(1)).vrfRequestId;
+    await coordinator.fulfillRandomWordsWithOverride(requestId, await lottery.getAddress(), [0n]);
+    await lottery.connect(seller).claimPrize(1);
+    await lottery.withdrawFees();
+
+    await lottery.setPaymentToken(await other.getAddress());
+    await market.setPaymentToken(await other.getAddress());
+    expect(await market.paymentToken()).to.equal(await other.getAddress());
+    expect(await usdc.balanceOf(await market.getAddress())).to.equal(0n);
+  });
+
+  it("refuses to switch payment token while fees are unwithdrawn", async () => {
+    const { market, lottery, usdc, seller, buyer, ticketId } = await setup();
+    const other = await deployUsdc();
+
+    const price = USDC(20);
+    await lottery.connect(seller).approve(await market.getAddress(), ticketId);
+    await market.connect(seller).listTicket(ticketId, price);
+    await fundAndApprove(usdc, buyer, await market.getAddress(), price);
+    await market.connect(buyer).buyTicket(ticketId);
+
+    expect(await market.accruedFees()).to.be.greaterThan(0n);
+    await expect(market.setPaymentToken(await other.getAddress())).to.be.revertedWith(
+      "withdraw fees first"
+    );
   });
 
   it("rejects cancellation by a non-seller", async () => {

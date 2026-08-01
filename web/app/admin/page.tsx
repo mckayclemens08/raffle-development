@@ -338,6 +338,8 @@ export default function AdminPage() {
 
         <TreasuryAndSafety />
 
+        <PaymentTokenForm />
+
         <ComplianceAdmin />
       </div>
     </div>
@@ -414,6 +416,69 @@ function TreasuryAndSafety() {
       <p className="mt-3 text-xs text-neutral-500">
         Pausing stops buying, listing and trading. Claiming a prize is never paused — players can always
         withdraw what they have won.
+      </p>
+
+      <StatusLine
+        isPending={lotteryAction.isPending || marketAction.isPending}
+        isConfirming={lotteryAction.isConfirming || marketAction.isConfirming}
+        isSuccess={lotteryAction.isSuccess || marketAction.isSuccess}
+        error={lotteryAction.error ?? marketAction.error}
+      />
+    </Card>
+  );
+}
+
+/// Migrating the settlement stablecoin. The contracts refuse the change while
+/// they hold a balance, so this surfaces that precondition rather than letting
+/// the operator discover it as a bare revert.
+function PaymentTokenForm() {
+  const treasury = useTreasury();
+  const lotteryAction = useLotteryAdminAction();
+  const marketAction = useMarketAdminAction();
+  const [token, setToken] = useState("");
+
+  const feesOutstanding =
+    (treasury.lotteryFees !== undefined && treasury.lotteryFees > 0n) ||
+    (treasury.marketFees !== undefined && treasury.marketFees > 0n);
+
+  return (
+    <Card
+      title="Settlement token"
+      description="Move to a different stablecoin without redeploying — for an issuer freeze, or a token being retired."
+    >
+      <TextField
+        label="New token address"
+        value={token}
+        onChange={setToken}
+        placeholder="0x… (must be the same on both contracts)"
+      />
+
+      {feesOutstanding && (
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Withdraw accrued fees first — the contracts reject the change while they hold a balance,
+          because escrowed funds are denominated in the token they were paid in.
+        </p>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          disabled={!isAddress(token) || lotteryAction.isPending || lotteryAction.isConfirming}
+          onClick={() => lotteryAction.run("setPaymentToken", [token as `0x${string}`])}
+        >
+          1. Set on raffle
+        </button>
+        <button
+          className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
+          disabled={!isAddress(token) || marketAction.isPending || marketAction.isConfirming}
+          onClick={() => marketAction.run("setPaymentToken", [token as `0x${string}`])}
+        >
+          2. Set on market
+        </button>
+      </div>
+      <p className="mt-3 text-xs text-neutral-500">
+        Order matters: the market verifies it matches the raffle&apos;s token, so set the raffle first.
+        Pause sales and settle every open round before starting.
       </p>
 
       <StatusLine

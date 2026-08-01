@@ -4,6 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { hardhat, sepolia, baseSepolia } from "viem/chains";
 import complianceAbi from "@/lib/abi/ComplianceRegistry.json";
 import { countryToBytes2, isBlockedCountry } from "@/lib/compliance";
+import { resolveGeo } from "@/lib/geo";
 
 /// Records a completed identity check on-chain.
 ///
@@ -96,12 +97,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const ipCountry =
-    request.headers.get("x-vercel-ip-country") ??
-    request.headers.get("cf-ipcountry") ??
-    process.env.COMPLIANCE_DEV_COUNTRY ??
-    null;
-  if (ipCountry && isBlockedCountry(ipCountry)) {
+  // Resolved through the same chain the /geo route uses, so the check that
+  // gates verification can't drift from the one shown to the player.
+  const geo = await resolveGeo(request.headers);
+  if (geo.determined && geo.blocked) {
     return NextResponse.json(
       { ok: false, reason: "Your connection appears to originate from a restricted jurisdiction.", blocked: true },
       { status: 403 }

@@ -3,6 +3,7 @@ import { ethers } from "hardhat";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 import {
   deployLottery,
+  deployUsdc,
   drawRound,
   fundAndApprove,
   BASE_PRICE,
@@ -279,6 +280,90 @@ describe("LotteryTicket", () => {
 
     await lottery.connect(bob).acceptOwnership();
     expect(await lottery.owner()).to.equal(bob.address);
+  });
+
+  // --- settlement token can be replaced without redeploying ---
+
+  it("refuses to switch payment token while funds are escrowed", async () => {
+    const { lottery, usdc, alice } = await setup();
+    const lotteryAddress = await lottery.getAddress();
+    const other = await deployUsdc();
+
+    await fundAndApprove(usdc, alice, lotteryAddress, BASE_PRICE);
+    await lottery.connect(alice).buyTicket(BASE_PRICE);
+
+    await expect(lottery.setPaymentToken(await other.getAddress())).to.be.revertedWith(
+      "settle balances first"
+    );
+  });
+
+  it("switches payment token once every balance is settled", async () => {
+    const { lottery, coordinator, usdc, alice } = await setup();
+    const lotteryAddress = await lottery.getAddress();
+    const other = await deployUsdc();
+
+    // Run a full round, pay the winner, withdraw the fee.
+    await fundAndApprove(usdc, alice, lotteryAddress, BASE_PRICE);
+    await lottery.connect(alice).buyTicket(BASE_PRICE);
+    await time.increase(ROUND_DURATION + 1);
+    await drawRound(lottery, coordinator, 0n);
+    await lottery.connect(alice).claimPrize(1);
+    await lottery.withdrawFees();
+    expect(await usdc.balanceOf(lotteryAddress)).to.equal(0n);
+
+    await lottery.setPaymentToken(await other.getAddress());
+    expect(await lottery.paymentToken()).to.equal(await other.getAddress());
+
+    // The new token is genuinely in use for the next round.
+    await lottery.startNewRound();
+    await fundAndApprove(other, alice, lotteryAddress, BASE_PRICE);
+    await lottery.connect(alice).buyTicket(BASE_PRICE);
+    expect(await other.balanceOf(lotteryAddress)).to.equal(BASE_PRICE);
+  });
+
+  it("cannot be blocked from migrating by dusting the contract", async () => {
+    const { lottery, coordinator, usdc, alice, bob } = await setup();
+    const lotteryAddress = await lottery.getAddress();
+    const other = await deployUsdc();
+
+    await fundAndApprove(usdc, alice, lotteryAddress, BASE_PRICE);
+    await lottery.connect(alice).buyTicket(BASE_PRICE);
+    await time.increase(ROUND_DURATION + 1);
+    await drawRound(lottery, coordinator, 0n);
+    await lottery.connect(alice).claimPrize(1);
+    await lottery.withdrawFees();
+
+    // Anyone can push tokens at the contract. If the guard read `balanceOf`,
+    // one unit of dust would block the migration permanently.
+    await usdc.mint(bob.address, 1n);
+    await usdc.connect(bob).transfer(lotteryAddress, 1n);
+    expect(await usdc.balanceOf(lotteryAddress)).to.equal(1n);
+
+    await lottery.setPaymentToken(await other.getAddress());
+    expect(await lottery.paymentToken()).to.equal(await other.getAddress());
+  });
+
+  it("tracks what it owes independently of its raw balance", async () => {
+    const { lottery, usdc, alice, bob } = await setup();
+    const lotteryAddress = await lottery.getAddress();
+
+    await fundAndApprove(usdc, alice, lotteryAddress, BASE_PRICE);
+    await lottery.connect(alice).buyTicket(BASE_PRICE);
+    expect(await lottery.totalEscrowed()).to.equal(BASE_PRICE);
+
+    // Dust inflates the balance but not the obligation.
+    await usdc.mint(bob.address, 5n);
+    await usdc.connect(bob).transfer(lotteryAddress, 5n);
+    expect(await usdc.balanceOf(lotteryAddress)).to.equal(BASE_PRICE + 5n);
+    expect(await lottery.totalEscrowed()).to.equal(BASE_PRICE);
+  });
+
+  it("rejects a zero or unchanged payment token", async () => {
+    const { lottery, usdc } = await setup();
+    await expect(lottery.setPaymentToken(ethers.ZeroAddress)).to.be.revertedWith("zero payment token");
+    await expect(lottery.setPaymentToken(await usdc.getAddress())).to.be.revertedWith(
+      "same payment token"
+    );
   });
 
   it("restricts owner-only controls", async () => {

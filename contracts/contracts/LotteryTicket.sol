@@ -46,7 +46,11 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         bool swept;
     }
 
-    IERC20 public immutable paymentToken;
+    /// @notice The stablecoin tickets and prizes settle in.
+    /// @dev Settable rather than immutable so an issuer freezing this contract,
+    /// or deprecating the token, doesn't force a redeploy and a migration of
+    /// every ticket and balance. See setPaymentToken for the safety guard.
+    IERC20 public paymentToken;
     IComplianceRegistry public complianceRegistry;
     uint256 public basePrice;
     uint256 public priceIncrement;
@@ -64,6 +68,14 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
     /// claimPrize revert and strand the winner's money.
     uint256 public accruedFees;
 
+    /// @notice Everything the contract currently owes: unsettled prize pools
+    /// plus accrued fees.
+    /// @dev Tracked internally rather than read from `balanceOf`, because a
+    /// raw balance check can be griefed — anyone can send a single token unit
+    /// to the contract and permanently block a payment-token migration. Dust
+    /// sent here is simply ignored.
+    uint256 public totalEscrowed;
+
     uint256 public currentRound;
     uint256 private _nextTicketId = 1;
     mapping(uint256 => Round) public rounds;
@@ -78,6 +90,7 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
     event TicketPurchased(uint256 indexed roundId, uint256 indexed ticketId, address indexed buyer, uint256 price);
     event PoolDonated(uint256 indexed roundId, address indexed from, uint256 amount);
     event ComplianceRegistrySet(address indexed registry);
+    event PaymentTokenSet(address indexed token);
     event DrawRequested(uint256 indexed roundId, uint256 requestId, bool isRetry);
     event WinnerDrawn(uint256 indexed roundId, uint256 indexed winnerTicketId, address winner);
     event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 payout, uint256 fee);
@@ -136,6 +149,7 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         ticketId = _nextTicketId++;
         round.ticketsSold += 1;
         round.pool += price;
+        totalEscrowed += price;
 
         paymentToken.safeTransferFrom(msg.sender, address(this), price);
 
@@ -151,6 +165,7 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
     function donateToPool(uint256 amount) external nonReentrant {
         require(amount > 0, "zero amount");
         paymentToken.safeTransferFrom(msg.sender, address(this), amount);
+        totalEscrowed += amount;
 
         Round storage round = rounds[currentRound];
         if (round.drawn) {
@@ -166,6 +181,10 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
     /// never lands (subscription out of funds, callback gas too low, coordinator
     /// incident), the round would otherwise be stuck and its pool locked
     /// forever. After `drawRetryTimeout` the request can be reissued.
+    /// @dev The request id only exists once the coordinator call returns, so
+    /// the state writes cannot precede it. Safe because this is nonReentrant
+    /// and the callee is the VRF coordinator we configure, not user input.
+    // slither-disable-next-line reentrancy-no-eth
     function requestDraw() external nonReentrant returns (uint256 requestId) {
         Round storage round = rounds[currentRound];
         require(block.timestamp >= round.endTime, "round still open");
@@ -236,6 +255,7 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         uint256 payout = round.pool - fee;
 
         accruedFees += fee;
+        totalEscrowed -= payout;
         paymentToken.safeTransfer(winner, payout);
 
         emit PrizeClaimed(roundId, winner, payout, fee);
@@ -261,6 +281,7 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         uint256 amount = accruedFees;
         require(amount > 0, "nothing to withdraw");
         accruedFees = 0;
+        totalEscrowed -= amount;
         paymentToken.safeTransfer(feeRecipient, amount);
         emit FeesWithdrawn(feeRecipient, amount);
     }
@@ -315,6 +336,27 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         require(_complianceRegistry != address(0), "zero compliance registry");
         complianceRegistry = IComplianceRegistry(_complianceRegistry);
         emit ComplianceRegistrySet(_complianceRegistry);
+    }
+
+    /// @notice Switches the settlement stablecoin.
+    ///
+    /// @dev Only allowed when this contract holds none of the current token.
+    /// A pool is denominated in whatever was paid in, so switching while funds
+    /// are escrowed would leave prizes owed in one token and payable in
+    /// another. Requiring a zero balance is a single cheap check that proves
+    /// nothing can be stranded: every prize claimed or swept, every fee
+    /// withdrawn.
+    ///
+    /// The practical sequence is therefore: pause, let the open round finish
+    /// and be claimed (or wait out the claim window and sweep), withdraw fees,
+    /// switch, unpause.
+    function setPaymentToken(address _paymentToken) external onlyOwner {
+        require(_paymentToken != address(0), "zero payment token");
+        require(_paymentToken != address(paymentToken), "same payment token");
+        require(totalEscrowed == 0, "settle balances first");
+
+        paymentToken = IERC20(_paymentToken);
+        emit PaymentTokenSet(_paymentToken);
     }
 
     function setClaimWindow(uint256 _claimWindow) external onlyOwner {

@@ -1,8 +1,33 @@
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
 import { base, metaMaskWallet, rainbowWallet, walletConnectWallet } from "@rainbow-me/rainbowkit/wallets";
-import { createConfig, http } from "wagmi";
+import { createConfig, fallback, http } from "wagmi";
 import { hardhat, sepolia } from "wagmi/chains";
 import { DEV_WALLETS_ENABLED, devWalletConnectors } from "./devWallets";
+
+/// Our own node first, a public endpoint behind it.
+///
+/// Reading and writing through a single hosted RPC means a rate limit, outage
+/// or account suspension there takes the app down while the chain itself is
+/// perfectly healthy. `fallback` tries each transport in order, so the hosted
+/// endpoint becomes a safety net rather than the critical path.
+///
+/// Set NEXT_PUBLIC_RPC_URL to our node and NEXT_PUBLIC_RPC_FALLBACK_URL to a
+/// hosted provider. With neither set this collapses to the chain's default
+/// public RPC, which is fine for local and preview work.
+///
+/// These are read as literal `process.env.X` references on purpose: Next only
+/// inlines statically-analysable lookups into the client bundle, so a computed
+/// key like process.env[`RPC_${id}`] would silently be undefined in the browser.
+function transportFor() {
+  const endpoints = [
+    process.env.NEXT_PUBLIC_RPC_URL,
+    process.env.NEXT_PUBLIC_RPC_FALLBACK_URL,
+  ].filter((url): url is string => Boolean(url));
+
+  if (endpoints.length === 0) return http();
+  // The trailing `http()` keeps the chain's public default as a last resort.
+  return fallback([...endpoints.map((url) => http(url)), http()]);
+}
 
 // `hardhat` (chain 31337) is included for local development against `npx hardhat node`.
 // Drop it once the app only targets deployed testnet/mainnet contracts.
@@ -37,8 +62,10 @@ export const wagmiConfig = createConfig({
   connectors: [...walletConnectors, ...devWalletConnectors()],
   chains,
   transports: {
+    // Local dev always talks to the hardhat node directly; only the public
+    // chain benefits from the failover chain.
     [hardhat.id]: http(),
-    [sepolia.id]: http(),
+    [sepolia.id]: transportFor(),
   },
   ssr: true,
 });

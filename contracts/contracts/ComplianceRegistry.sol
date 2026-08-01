@@ -142,6 +142,9 @@ contract ComplianceRegistry is IComplianceRegistry, Ownable2Step {
     /// reasons so that a harder disqualification (revoked, blocked country,
     /// lapsed verification) always wins — those must also stop a payout,
     /// whereas self-exclusion must not.
+    /// @dev Exact zero is the intended sentinel for "no record was ever
+    /// written" — not an approximate balance or timestamp comparison.
+    // slither-disable-next-line incorrect-equality
     function statusOf(address user) public view returns (Status) {
         Record memory record = _records[user];
         if (record.verifiedAt == 0) return Status.None;

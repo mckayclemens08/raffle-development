@@ -25,7 +25,10 @@ contract TicketMarket is Ownable2Step, Pausable, ReentrancyGuard {
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
     LotteryTicket public immutable ticketContract;
-    IERC20 public immutable paymentToken;
+    /// @dev Settable for the same reason as the raffle's: a frozen or retired
+    /// stablecoin shouldn't force a redeploy. Must be kept in step with the
+    /// raffle's token, since a sale routes 1% into its prize pool.
+    IERC20 public paymentToken;
     IComplianceRegistry public complianceRegistry;
     address public feeRecipient;
 
@@ -148,5 +151,24 @@ contract TicketMarket is Ownable2Step, Pausable, ReentrancyGuard {
     function setComplianceRegistry(address _complianceRegistry) external onlyOwner {
         require(_complianceRegistry != address(0), "zero compliance registry");
         complianceRegistry = IComplianceRegistry(_complianceRegistry);
+    }
+
+    /// @notice Switches the settlement stablecoin. Must match the raffle's, or
+    /// the 1% pool share can't be routed into it.
+    /// @dev Guarded on a zero balance for the same reason as the raffle: any
+    /// accrued fee is denominated in the token it was collected in, so it must
+    /// be withdrawn before the token changes.
+    function setPaymentToken(address _paymentToken) external onlyOwner {
+        require(_paymentToken != address(0), "zero payment token");
+        require(_paymentToken != address(paymentToken), "same payment token");
+        // Internal accounting, not balanceOf: a raw balance check could be
+        // blocked forever by anyone dusting the contract with the old token.
+        require(accruedFees == 0, "withdraw fees first");
+        require(
+            _paymentToken == address(ticketContract.paymentToken()),
+            "must match raffle payment token"
+        );
+
+        paymentToken = IERC20(_paymentToken);
     }
 }

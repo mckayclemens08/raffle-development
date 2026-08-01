@@ -26,9 +26,16 @@ jobs:
       - run: pip install slither-analyzer
       - name: Slither
         working-directory: contracts
-        # Fails the build on high/medium severity only; the informational
-        # detectors (timestamp use, naming) are noisy for a time-based lottery.
-        run: slither . --exclude-dependencies --filter-paths "node_modules|contracts/mocks" --fail-high --fail-medium
+        # --fail-medium means "medium and above" (the two fail flags are
+        # mutually exclusive). Informational and low detectors are excluded
+        # deliberately: `timestamp` fires on every comparison in a lottery
+        # measured in days, where a miner's few seconds of leeway is irrelevant.
+        # Genuine false positives are annotated inline with slither-disable and
+        # a justification, rather than being silenced globally here.
+        run: >
+          slither . --exclude-dependencies
+          --filter-paths "node_modules|contracts/mocks"
+          --exclude-informational --exclude-low --fail-medium
 
   web:
     name: Web — typecheck, lint, build
