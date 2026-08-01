@@ -14,7 +14,16 @@ async function main() {
   const lottery = await ethers.getContractAt("LotteryTicket", lotteryAddress);
   const usdc = await ethers.getContractAt("MockUSDC", usdcAddress);
   const signers = await ethers.getSigners();
-  const buyers = signers.slice(1, 5);
+  // Only the accounts deploy-local pre-verifies can buy — the compliance gate
+  // rejects everyone else. Player 3 (index 3) is deliberately left unverified
+  // so the blocked-user experience is visible in the app, so don't include it.
+  const registryAddress = await lottery.complianceRegistry();
+  const registry = await ethers.getContractAt("ComplianceRegistry", registryAddress);
+  const buyers = [];
+  for (const signer of signers.slice(1, 6)) {
+    if (await registry.isAllowed(signer.address)) buyers.push(signer);
+  }
+  if (buyers.length === 0) throw new Error("no verified dev accounts — run deploy-local first");
 
   const count = Number(process.env.TICKETS ?? 6);
   for (let i = 0; i < count; i++) {

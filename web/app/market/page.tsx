@@ -14,6 +14,8 @@ import { useRoundActivity } from "@/lib/useRoundActivity";
 import { formatUsdc, parseUsdc, LOTTERY_ADDRESS, MARKET_ADDRESS } from "@/lib/contracts";
 import { LiveChartCard } from "@/components/LiveChartCard";
 import { type ChartPoint } from "@/components/LineAreaChart";
+import { ComplianceGate } from "@/components/ComplianceGate";
+import { useNow } from "@/lib/useNow";
 
 function formatAxisUsd(value: number): string {
   if (value >= 1000) {
@@ -80,6 +82,7 @@ export default function MarketPage() {
   const { roundId, round, price } = useCurrentRound();
   const { points } = useRoundActivity(roundId);
   const [search, setSearch] = useState("");
+  const now = useNow(30_000);
 
   const filtered = useMemo(
     () => listings.filter((listing) => listing.ticketId.toString().includes(search.trim())),
@@ -90,16 +93,16 @@ export default function MarketPage() {
   // the current (next-ticket) price closes out the series. The x-domain starts
   // at first activity, not round creation, so a quiet lead-in doesn't crush it.
   const pricePoints = useMemo<ChartPoint[]>(() => {
-    if (!round || price === undefined) return [];
+    if (!round || price === undefined || now === null) return [];
     const series: ChartPoint[] = points.map((p) => ({ timestamp: p.timestamp, value: Number(p.price) / 1e6 }));
     const anchorTs = series.length > 0 ? series[0].timestamp - 60 : Number(round.startTime);
     const anchorValue = series.length > 0 ? series[0].value : Number(price) / 1e6;
     return [
       { timestamp: anchorTs, value: anchorValue },
       ...series,
-      { timestamp: Math.floor(Date.now() / 1000), value: Number(price) / 1e6 },
+      { timestamp: Math.floor(now / 1000), value: Number(price) / 1e6 },
     ];
-  }, [round, price, points]);
+  }, [round, price, points, now]);
 
   if (!LOTTERY_ADDRESS || !MARKET_ADDRESS) {
     return <p className="mx-auto max-w-5xl px-6 py-16 text-center text-neutral-500">Contracts not deployed yet.</p>;
@@ -126,7 +129,9 @@ export default function MarketPage() {
 
       {isConnected && (
         <div className="mt-6">
-          <ListTicketForm />
+          <ComplianceGate connected={isConnected}>
+            <ListTicketForm />
+          </ComplianceGate>
         </div>
       )}
 
@@ -168,23 +173,25 @@ export default function MarketPage() {
                   </td>
                   <td className="px-4 py-3 font-medium">${formatUsdc(listing.price)}</td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-                      disabled={!isConnected || isPending || isConfirming || usdc.isApproving}
-                      onClick={() => {
-                        if (usdc.allowance !== undefined && usdc.allowance < listing.price) {
-                          usdc.approve(listing.price);
-                        } else {
-                          buyListing(listing.ticketId);
-                        }
-                      }}
-                    >
-                      {usdc.allowance !== undefined && usdc.allowance < listing.price
-                        ? usdc.isApproving
-                          ? "Approving…"
-                          : "Approve USDC"
-                        : "Buy"}
-                    </button>
+                    <ComplianceGate connected={isConnected} compact>
+                      <button
+                        className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                        disabled={!isConnected || isPending || isConfirming || usdc.isApproving}
+                        onClick={() => {
+                          if (usdc.allowance !== undefined && usdc.allowance < listing.price) {
+                            usdc.approve(listing.price);
+                          } else {
+                            buyListing(listing.ticketId);
+                          }
+                        }}
+                      >
+                        {usdc.allowance !== undefined && usdc.allowance < listing.price
+                          ? usdc.isApproving
+                            ? "Approving…"
+                            : "Approve USDC"
+                          : "Buy"}
+                      </button>
+                    </ComplianceGate>
                   </td>
                 </tr>
               ))

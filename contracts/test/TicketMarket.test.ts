@@ -6,13 +6,14 @@ import { deployLottery, fundAndApprove, BASE_PRICE, USDC } from "./helpers";
 describe("TicketMarket", () => {
   async function setup() {
     const [deployer, feeRecipient, seller, buyer] = await ethers.getSigners();
-    const { usdc, lottery } = await deployLottery(deployer.address, feeRecipient.address);
+    const { usdc, registry, lottery } = await deployLottery(deployer.address, feeRecipient.address);
 
     const TicketMarket = await ethers.getContractFactory("TicketMarket");
     const market = await TicketMarket.deploy(
       deployer.address,
       await lottery.getAddress(),
       await usdc.getAddress(),
+      await registry.getAddress(),
       feeRecipient.address
     );
     await market.waitForDeployment();
@@ -21,7 +22,7 @@ describe("TicketMarket", () => {
     await lottery.connect(seller).buyTicket(BASE_PRICE);
     const ticketId = 1n;
 
-    return { deployer, feeRecipient, seller, buyer, usdc, lottery, market, ticketId };
+    return { deployer, feeRecipient, seller, buyer, usdc, registry, lottery, market, ticketId };
   }
 
   it("rejects listing by a non-owner", async () => {
@@ -61,6 +62,10 @@ describe("TicketMarket", () => {
     const expectedPoolFee = (price * 100n) / 10_000n;
     const expectedSellerProceeds = price - expectedPlatformFee - expectedPoolFee;
 
+    // The platform fee accrues rather than being pushed, so it lands on the
+    // recipient only once withdrawn.
+    expect(await market.accruedFees()).to.equal(expectedPlatformFee);
+    await market.withdrawFees();
     expect(await usdc.balanceOf(feeRecipient.address)).to.equal(feeRecipientBefore + expectedPlatformFee);
     expect(await usdc.balanceOf(seller.address)).to.equal(sellerBefore + expectedSellerProceeds);
     expect(await usdc.balanceOf(buyer.address)).to.equal(0n);
@@ -77,10 +82,11 @@ describe("TicketMarket", () => {
     await time.increase(30 * 24 * 60 * 60 + 1);
     await lottery.requestDraw();
     const requestId = (await lottery.rounds(1)).vrfRequestId;
-    const coordinatorAddress = await lottery.vrfCoordinator();
-    const coordinator = await ethers.getContractAt("VRFCoordinatorV2Mock", coordinatorAddress);
+    const coordinatorAddress = await lottery.s_vrfCoordinator();
+    const coordinator = await ethers.getContractAt("MockVRFCoordinatorV2Plus", coordinatorAddress);
     await coordinator.fulfillRandomWordsWithOverride(requestId, await lottery.getAddress(), [0n]);
     await lottery.connect(seller).claimPrize(1);
+    await lottery.withdrawFees();
 
     // Trade the (now settled) ticket: pool share must fall through to the
     // platform rather than being stranded in the paid round.
@@ -96,10 +102,13 @@ describe("TicketMarket", () => {
 
     const expectedPlatformFee = (price * 200n) / 10_000n;
     const expectedPoolFee = (price * 100n) / 10_000n;
-    expect(await usdc.balanceOf(feeRecipient.address)).to.equal(
-      feeRecipientBefore + expectedPlatformFee + expectedPoolFee
-    );
-    expect(await usdc.balanceOf(await lottery.getAddress())).to.equal(lotteryBalanceBefore);
+
+    // Market fee accrues on the market; the pool share falls through to the
+    // raffle's own fee balance because round 1 is already drawn.
+    await market.withdrawFees();
+    expect(await usdc.balanceOf(feeRecipient.address)).to.equal(feeRecipientBefore + expectedPlatformFee);
+    expect(await lottery.accruedFees()).to.equal(expectedPoolFee);
+    expect(await usdc.balanceOf(await lottery.getAddress())).to.equal(lotteryBalanceBefore + expectedPoolFee);
   });
 
   it("rejects buying without sufficient USDC allowance", async () => {

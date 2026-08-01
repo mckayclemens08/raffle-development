@@ -16,6 +16,83 @@ than the price they were quoted, even if demand pushes the price up in the same 
 For local dev a `MockUSDC` (mintable by anyone) is deployed and seeded to the first five Hardhat
 accounts. On a real network you'd pass the canonical USDC address for that chain instead.
 
+## Player protection & contract safety
+
+Implemented in response to the launch-readiness review:
+
+- **A round advances once it is *drawn*, not once it is claimed.** Requiring a claim meant one
+  winner who never came back (lost keys, lost interest) halted the platform permanently.
+- **Draws are retryable.** If Chainlink accepts a request but the callback never lands, the round
+  would otherwise be stuck and its pool locked forever. After `drawRetryTimeout` anyone can reissue.
+  A late fulfilment of a superseded request is ignored rather than reverted.
+- **Unclaimed prizes are swept after 90 days** (`claimWindow`), permissionlessly.
+- **Fees accrue, they aren't pushed.** USDC can freeze an address; pushing a fee on every claim
+  would let a frozen fee recipient block a winner's payout. `withdrawFees()` is separate.
+- **Pausable** on buying, listing and trading — never on claiming, so players can always exit.
+- **Two-step ownership** on every contract, so a mistyped handover can't brick them. Move to a
+  multisig with a timelock before real money.
+- **Chainlink VRF 2.5** (the v2 interface is superseded).
+- **Self-exclusion is on-chain and one-way.** A player can start or extend it; nobody — not the
+  player, not the operator, and not by re-verifying — can shorten or lift one. Winnings already held
+  stay claimable, which is why the registry separates `isAllowed` (may play) from `canClaim`
+  (may be paid).
+- **Session limits**: hourly reality checks and an enforced 15-minute break after four continuous
+  hours, per the licence conditions.
+
+Static analysis runs in CI:
+
+```bash
+pip install slither-analyzer
+cd contracts && slither . --exclude-dependencies --filter-paths "node_modules|contracts/mocks"
+```
+
+Remaining Slither output is informational — chiefly `timestamp` (inherent to a time-based lottery,
+where the tolerance is days and a miner can shift seconds) and naming conventions.
+
+## KYC & geofencing
+
+Participation is gated by `ComplianceRegistry`. **The gate is enforced on-chain, not in the UI** —
+`buyTicket`, `listTicket`, the market's `buyTicket`, `claimPrize`, and every ERC-721 transfer all
+check the registry. That matters because the contracts are permissionlessly callable: a
+frontend-only check would be bypassed by anyone calling the contract directly.
+
+- **No personal data on-chain.** The registry stores only a wallet address, an ISO 3166-1 alpha-2
+  country code, timestamps, and an opaque `providerRef` hash. Names, dates of birth and document
+  numbers never touch the chain.
+- **Transfers are gated too**, so a ticket can't be handed to an unverified or blocked address
+  via a raw `transferFrom`, and every holder is verified by construction.
+- **Blocking a jurisdiction is retroactive** — flip a country off and everyone verified from it
+  loses access immediately, without re-verification.
+- **A lapsed winner's prize is withheld, not lost.** It stays escrowed in the round and releases
+  once they re-verify.
+- Verifications carry a **1-year expiry**, matching the periodic re-verification regulators expect.
+
+The flow: `/verify` → `POST /api/compliance/verify` → geo + age + field checks → the backend
+verifier key writes an attestation to the registry. `GET /api/compliance/geo` resolves the
+country server-side from CDN headers (`x-vercel-ip-country`, `cf-ipcountry`, …).
+
+Admin (`/admin`) has a Compliance panel to block/unblock a jurisdiction and revoke a wallet.
+
+### What is NOT production-ready here
+
+Read this before assuming the app is compliant:
+
+1. **The identity check is a stub.** `runIdentityCheck` in `app/api/compliance/verify/route.ts`
+   only sanity-checks the submitted fields. A licensed operator replaces it with a provider
+   (Persona, Sumsub, Onfido, Veriff, Jumio) that captures a government ID, does a liveness/selfie
+   match, and screens against sanctions and PEP lists — returning a decision by signed webhook.
+2. **IP geolocation is a deterrent, not a control.** A VPN defeats it in one click. Production
+   needs a commercial geo database (MaxMind GeoIP2, IP2Location) *plus* VPN/proxy/hosting-provider
+   detection, cross-checked against the document country and the payment instrument.
+3. **The blocked-country list in `lib/compliance.ts` is a placeholder**, not legal advice. The real
+   list depends on the licence you hold and must come from gaming counsel. US restrictions in
+   particular are state-by-state.
+4. **The verifier key is a trusted backend signer.** It can allowlist anyone, so it needs the same
+   protection as the owner key (KMS/HSM, not an env var) in production.
+5. **None of this substitutes for licensing.** Identity checks are one requirement among many —
+   AML program, transaction monitoring, responsible-gaming controls, segregated player funds,
+   audits, and a licence for every jurisdiction served.
+
 ## Contracts
 
 ```bash
@@ -36,6 +113,27 @@ test USDC to the first five dev accounts, and writes all addresses straight into
 `web/.env.local`. Import one of the Hardhat node's printed private keys into MetaMask, add a
 network for `http://127.0.0.1:8545` (chain id `31337`), and you can buy a ticket for real
 against the running app.
+
+### Dev wallets (no wallet app needed)
+
+Set `NEXT_PUBLIC_DEV_WALLETS=true` in `web/.env.local` and a **DEV MODE** bar appears at the
+top of the app with one-click "sign in as" buttons for Admin (the contract owner) and three
+players. This exists so you can click through the wallet-gated screens — My Tickets, the
+"List a ticket" form, and `/admin` — without installing MetaMask or creating a passkey.
+
+The transactions are real: Hardhat unlocks its own dev accounts, so the node signs for them.
+Buying, approving, listing, drawing and claiming all mine actual blocks and move test USDC.
+The choice persists across reloads, and the `/admin` nav link only appears for the owner.
+
+Populate the local chain with activity to look at:
+
+```bash
+npx hardhat run scripts/simulate-activity.ts --network localhost   # buys tickets (TICKETS=6)
+npx hardhat run scripts/list-ticket.ts --network localhost         # lists one (TICKET=, PRICE_USD=)
+```
+
+Never set `NEXT_PUBLIC_DEV_WALLETS=true` for a real deployment — the addresses are Hardhat's
+well-known public test accounts.
 
 After changing contract source, resync the ABIs the frontend reads:
 

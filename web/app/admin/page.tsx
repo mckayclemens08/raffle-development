@@ -1,16 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { isAddress } from "viem";
 import { useAccount } from "wagmi";
 import {
   useAdminSettings,
+  useBlockedCountries,
+  useComplianceAdminAction,
   useCurrentRound,
   useLotteryAdminAction,
   useLotteryOwner,
   useMarketAdminAction,
+  useTreasury,
 } from "@/lib/hooks";
-import { formatUsdc, parseUsdc, LOTTERY_ADDRESS, MARKET_ADDRESS } from "@/lib/contracts";
+import {
+  formatUsdc,
+  parseUsdc,
+  COMPLIANCE_ADDRESS,
+  DRAW_RETRY_TIMEOUT_SECONDS,
+  LOTTERY_ADDRESS,
+  MARKET_ADDRESS,
+} from "@/lib/contracts";
+import { countryToBytes2 } from "@/lib/compliance";
+import { useNow } from "@/lib/useNow";
 
 function StatusLine({
   isPending,
@@ -66,13 +78,37 @@ function TextField({
 function RoundOverview() {
   const { roundId, round, price, refetch } = useCurrentRound();
   const lotteryAction = useLotteryAdminAction();
+  const now = useNow(30_000);
+
+  // Requesting a draw or opening a round changes everything on this card, so
+  // pull fresh state the moment the transaction confirms.
+  const settled = lotteryAction.isSuccess;
+  useEffect(() => {
+    if (settled) refetch();
+    // `refetch` is recreated each render by the hook, so keying on it would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settled]);
 
   if (!round || roundId === undefined) return null;
 
-  const now = Date.now();
-  const isClosed = now >= Number(round.endTime) * 1000;
-  const canRequestDraw = isClosed && round.ticketsSold > 0n && round.vrfRequestId === 0n;
-  const canStartNewRound = round.ticketsSold === 0n || round.paid;
+  const isClosed = now !== null && now >= Number(round.endTime) * 1000;
+  // A pending draw becomes retryable once the timeout lapses, so the button
+  // can't leave a stuck round with no way forward.
+  const drawPending = round.vrfRequestId !== 0n && !round.drawn;
+  const retryDueAt = (Number(round.drawRequestedAt) + DRAW_RETRY_TIMEOUT_SECONDS) * 1000;
+  const canRetry = drawPending && now !== null && now >= retryDueAt;
+  const canRequestDraw =
+    isClosed && round.ticketsSold > 0n && !round.drawn && (round.vrfRequestId === 0n || canRetry);
+  // Only needs the round drawn, not claimed — see LotteryTicket.startNewRound.
+  const canStartNewRound = round.ticketsSold === 0n || round.drawn;
+
+  function drawButtonLabel() {
+    if (!isClosed) return "Request draw (round still open)";
+    if (round!.drawn) return "Already drawn";
+    if (canRetry) return "Retry draw";
+    if (drawPending) return "Draw pending…";
+    return "Request draw";
+  }
 
   return (
     <Card title={`Round ${roundId.toString()}`} description="Live state read straight from the contract.">
@@ -119,7 +155,7 @@ function RoundOverview() {
           disabled={!canRequestDraw || lotteryAction.isPending || lotteryAction.isConfirming}
           onClick={() => lotteryAction.run("requestDraw")}
         >
-          {!isClosed ? "Request draw (round still open)" : "Request draw"}
+          {drawButtonLabel()}
         </button>
         <button
           className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-900 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -299,7 +335,177 @@ export default function AdminPage() {
         {settings.keyHash !== undefined && settings.vrfSubscriptionId !== undefined && (
           <VrfConfigForm keyHash={settings.keyHash} subscriptionId={settings.vrfSubscriptionId} />
         )}
+
+        <TreasuryAndSafety />
+
+        <ComplianceAdmin />
       </div>
     </div>
+  );
+}
+
+/// Fees accrue in the contracts rather than being pushed on every payout (so a
+/// frozen fee recipient can't block a player's money), which means they have to
+/// be withdrawn deliberately. Pause is the emergency stop.
+function TreasuryAndSafety() {
+  const treasury = useTreasury();
+  const lotteryAction = useLotteryAdminAction();
+  const marketAction = useMarketAdminAction();
+
+  // Reflect a pause or a withdrawal as soon as it confirms, rather than making
+  // the operator wait for the next poll.
+  const { refetch } = treasury;
+  const settled = lotteryAction.isSuccess || marketAction.isSuccess;
+  useEffect(() => {
+    if (settled) refetch();
+  }, [settled, refetch]);
+
+  return (
+    <Card
+      title="Treasury & safety"
+      description="Collect accrued fees, sweep expired prizes, and halt the platform if something goes wrong."
+    >
+      <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-neutral-500">Raffle fees</dt>
+          <dd className="font-medium text-neutral-900">
+            {treasury.lotteryFees !== undefined ? `$${formatUsdc(treasury.lotteryFees)}` : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-neutral-500">Market fees</dt>
+          <dd className="font-medium text-neutral-900">
+            {treasury.marketFees !== undefined ? `$${formatUsdc(treasury.marketFees)}` : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-neutral-500">Status</dt>
+          <dd className="font-medium text-neutral-900">
+            {treasury.lotteryPaused === undefined ? "—" : treasury.lotteryPaused ? "Paused" : "Live"}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="mt-5 flex flex-wrap gap-3">
+        <button
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          disabled={!treasury.lotteryFees || treasury.lotteryFees === 0n || lotteryAction.isPending}
+          onClick={() => lotteryAction.run("withdrawFees")}
+        >
+          Withdraw raffle fees
+        </button>
+        <button
+          className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
+          disabled={!treasury.marketFees || treasury.marketFees === 0n || marketAction.isPending}
+          onClick={() => marketAction.run("withdrawFees")}
+        >
+          Withdraw market fees
+        </button>
+        <button
+          className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+            treasury.lotteryPaused ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"
+          }`}
+          disabled={lotteryAction.isPending || lotteryAction.isConfirming}
+          onClick={() => lotteryAction.run(treasury.lotteryPaused ? "unpause" : "pause")}
+        >
+          {treasury.lotteryPaused ? "Resume ticket sales" : "Pause ticket sales"}
+        </button>
+      </div>
+      <p className="mt-3 text-xs text-neutral-500">
+        Pausing stops buying, listing and trading. Claiming a prize is never paused — players can always
+        withdraw what they have won.
+      </p>
+
+      <StatusLine
+        isPending={lotteryAction.isPending || marketAction.isPending}
+        isConfirming={lotteryAction.isConfirming || marketAction.isConfirming}
+        isSuccess={lotteryAction.isSuccess || marketAction.isSuccess}
+        error={lotteryAction.error ?? marketAction.error}
+      />
+    </Card>
+  );
+}
+
+/// Jurisdiction blocking and per-user revocation. Both are enforced on-chain,
+/// so a change here immediately affects who can buy, trade and claim.
+function ComplianceAdmin() {
+  const action = useComplianceAdminAction();
+  const [countryCode, setCountryCode] = useState("");
+  const [lookupAddress, setLookupAddress] = useState("");
+
+  const blocked = useBlockedCountries();
+
+  if (!COMPLIANCE_ADDRESS) {
+    return (
+      <Card title="Compliance" description="No ComplianceRegistry is configured for this deployment." >
+        <p className="text-sm text-neutral-500">
+          Set <code className="rounded bg-neutral-100 px-1">NEXT_PUBLIC_COMPLIANCE_ADDRESS</code> to manage KYC.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      title="Compliance"
+      description="Block a jurisdiction or withdraw a user's verification. Applies on-chain immediately."
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <TextField
+            label="Country code (ISO alpha-2)"
+            value={countryCode}
+            onChange={(v) => setCountryCode(v.toUpperCase().slice(0, 2))}
+            placeholder="FR"
+          />
+          <div className="mt-3 flex gap-2">
+            <button
+              className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              disabled={countryCode.length !== 2 || action.isPending || action.isConfirming}
+              onClick={() => action.run("setBlockedCountry", [countryToBytes2(countryCode), true])}
+            >
+              Block
+            </button>
+            <button
+              className="rounded-lg border border-neutral-300 px-3 py-2 text-sm font-semibold text-neutral-900 hover:bg-neutral-100 disabled:opacity-50"
+              disabled={countryCode.length !== 2 || action.isPending || action.isConfirming}
+              onClick={() => action.run("setBlockedCountry", [countryToBytes2(countryCode), false])}
+            >
+              Unblock
+            </button>
+          </div>
+          {blocked.length > 0 && (
+            <p className="mt-3 text-xs text-neutral-500">
+              Currently blocked: <span className="font-medium text-neutral-900">{blocked.join(", ")}</span>
+            </p>
+          )}
+        </div>
+
+        <div>
+          <TextField
+            label="Revoke a wallet's verification"
+            value={lookupAddress}
+            onChange={setLookupAddress}
+            placeholder="0x…"
+          />
+          <button
+            className="mt-3 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            disabled={!isAddress(lookupAddress) || action.isPending || action.isConfirming}
+            onClick={() => action.run("revoke", [lookupAddress as `0x${string}`])}
+          >
+            Revoke
+          </button>
+          <p className="mt-3 text-xs text-neutral-500">
+            A revoked winner&apos;s prize is withheld, not lost — it releases once they re-verify.
+          </p>
+        </div>
+      </div>
+      <StatusLine
+        isPending={action.isPending}
+        isConfirming={action.isConfirming}
+        isSuccess={action.isSuccess}
+        error={action.error}
+      />
+    </Card>
   );
 }

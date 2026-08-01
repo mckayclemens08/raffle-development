@@ -7,6 +7,8 @@ import { useRoundActivity } from "@/lib/useRoundActivity";
 import { formatUsdc, LOTTERY_ADDRESS } from "@/lib/contracts";
 import { LiveChartCard } from "@/components/LiveChartCard";
 import { type ChartPoint } from "@/components/LineAreaChart";
+import { ComplianceGate } from "@/components/ComplianceGate";
+import { useNow } from "@/lib/useNow";
 
 function formatAxisUsd(value: number): string {
   if (value >= 1000) {
@@ -16,8 +18,11 @@ function formatAxisUsd(value: number): string {
 }
 
 function Countdown({ endTime }: { endTime: bigint }) {
+  const now = useNow(60_000);
+  if (now === null) return <span>—</span>;
+
   const endMs = Number(endTime) * 1000;
-  const remainingMs = Math.max(0, endMs - Date.now());
+  const remainingMs = Math.max(0, endMs - now);
   const days = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
   const hours = Math.floor((remainingMs / (1000 * 60 * 60)) % 24);
 
@@ -30,10 +35,10 @@ function Countdown({ endTime }: { endTime: bigint }) {
 }
 
 function RoundProgressBar({ startTime, endTime }: { startTime: bigint; endTime: bigint }) {
+  const now = useNow(60_000);
   const start = Number(startTime) * 1000;
   const end = Number(endTime) * 1000;
-  const now = Date.now();
-  const pct = Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100));
+  const pct = now === null ? 0 : Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100));
 
   return (
     <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-neutral-100">
@@ -136,8 +141,10 @@ export default function Home() {
                   {round && <RoundProgressBar startTime={round.startTime} endTime={round.endTime} />}
                 </div>
 
+                <div className="mt-6">
+                  <ComplianceGate connected={isConnected}>
                 <button
-                  className="mt-6 w-full rounded-xl bg-blue-600 px-4 py-3.5 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="w-full rounded-xl bg-blue-600 px-4 py-3.5 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={
                     !isConnected ||
                     price === undefined ||
@@ -169,11 +176,13 @@ export default function Home() {
                               ? `Approve $${formatUsdc(price)} USDC`
                               : `Buy ticket for $${formatUsdc(price)}`}
                 </button>
-                {needsApproval && !usdc.isApproving && (
-                  <p className="mt-2 text-center text-xs text-neutral-400">
-                    First-time purchase takes two steps: approve USDC, then buy.
-                  </p>
-                )}
+                    {needsApproval && !usdc.isApproving && (
+                      <p className="mt-2 text-center text-xs text-neutral-400">
+                        First-time purchase takes two steps: approve USDC, then buy.
+                      </p>
+                    )}
+                  </ComplianceGate>
+                </div>
 
                 {isSuccess && (
                   <p className="mt-3 text-center text-sm text-emerald-600">

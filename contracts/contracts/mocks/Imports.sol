@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-// Pulls the Chainlink VRF mock coordinator into the compilation set so
-// Hardhat generates artifacts/typings for it, for use in tests only.
-import {VRFCoordinatorV2Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2Mock.sol";
+// The VRF 2.5 mock now lives in MockVRFCoordinatorV2Plus.sol — Chainlink's own
+// mock can't be compiled here (version-pinned OpenZeppelin import), so there is
+// nothing external to pull in. Kept as a placeholder for future test doubles.

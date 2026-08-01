@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useNow } from "@/lib/useNow";
 
 // Chart chrome tokens (light surface) — series color validated against #ffffff.
 const SERIES = "#2a78d6";
@@ -60,15 +61,20 @@ export function LineAreaChart({
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const width = 640; // viewBox units; SVG scales to its container
 
+  const now = useNow(30_000);
+
   const series = useMemo<ChartPoint[]>(() => {
     if (points.length === 0) return [];
-    const nowSec = Math.floor(Date.now() / 1000);
+    // Before the clock ticks, plot only real data rather than inventing a
+    // "now" the server and client would disagree about.
+    if (now === null) return points;
+    const nowSec = Math.floor(now / 1000);
     const last = points[points.length - 1];
     if (extendToNow && nowSec > last.timestamp) {
       return [...points, { timestamp: nowSec, value: last.value }];
     }
     return points;
-  }, [points, extendToNow]);
+  }, [points, extendToNow, now]);
 
   const geometry = useMemo(() => {
     if (series.length === 0) return null;

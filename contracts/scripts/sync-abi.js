@@ -7,6 +7,11 @@ const artifacts = [
   { name: "LotteryTicket", artifact: "contracts/LotteryTicket.sol/LotteryTicket.json", out: "LotteryTicket.json" },
   { name: "TicketMarket", artifact: "contracts/TicketMarket.sol/TicketMarket.json", out: "TicketMarket.json" },
   { name: "ERC20", artifact: "contracts/mocks/MockUSDC.sol/MockUSDC.json", out: "ERC20.json" },
+  {
+    name: "ComplianceRegistry",
+    artifact: "contracts/ComplianceRegistry.sol/ComplianceRegistry.json",
+    out: "ComplianceRegistry.json",
+  },
 ];
 
 for (const { artifact, out } of artifacts) {

@@ -51,6 +51,9 @@ export function useRoundActivity(roundId: bigint | undefined) {
   }, [publicClient, roundId]);
 
   useEffect(() => {
+    // Fetch-on-mount: `load` is async, so its setState lands in the promise
+    // continuation, not synchronously in the effect body.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 

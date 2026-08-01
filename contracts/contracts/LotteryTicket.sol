@@ -5,19 +5,27 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
-import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
+import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
+import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+import {IComplianceRegistry} from "./IComplianceRegistry.sol";
 
 /// @title LotteryTicket
 /// @notice Monthly raffle where ticket price rises with demand within a round.
 /// Tickets are paid for in a stablecoin (USDC); prices use the token's native
-/// decimals (6 for USDC). Winning ticket is chosen via Chainlink VRF; whoever
-/// holds the NFT at draw time (tickets are transferable, see TicketMarket)
-/// wins the pool.
+/// decimals (6 for USDC). The winning ticket is chosen via Chainlink VRF 2.5;
+/// whoever holds the NFT at draw time (tickets are transferable, see
+/// TicketMarket) wins the pool.
+///
+/// @dev OWNERSHIP is two-step, inherited from Chainlink's ConfirmedOwner via
+/// VRFConsumerBaseV2Plus: the deployer starts as owner and hands over with
+/// transferOwnership + acceptOwnership, so a fat-fingered address can't brick
+/// the contract. Transfer to a multisig (with a timelock on sensitive setters)
+/// before handling real money.
+///
 /// @dev ERC721Enumerable lets the frontend list a wallet's tickets without an indexer.
-contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsumerBaseV2 {
+contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsumerBaseV2Plus {
     using SafeERC20 for IERC20;
 
     uint256 public constant PLATFORM_FEE_BPS = 500; // 5%
@@ -31,52 +39,68 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
         uint256 pool;
         uint256 vrfRequestId;
         uint256 winnerTicketId;
+        uint64 drawRequestedAt;
+        uint64 drawnAt;
         bool drawn;
         bool paid;
+        bool swept;
     }
 
     IERC20 public immutable paymentToken;
+    IComplianceRegistry public complianceRegistry;
     uint256 public basePrice;
     uint256 public priceIncrement;
     uint256 public roundDuration;
     address public feeRecipient;
+
+    /// @notice How long a winner has to claim before the prize can be swept.
+    uint256 public claimWindow = 90 days;
+    /// @notice How long to wait for a VRF callback before a draw may be retried.
+    uint256 public drawRetryTimeout = 1 hours;
+
+    /// @dev Platform fees accrue here rather than being pushed on every claim.
+    /// A push would couple the winner's payout to the fee recipient being able
+    /// to receive — and USDC can freeze an address, which would otherwise make
+    /// claimPrize revert and strand the winner's money.
+    uint256 public accruedFees;
 
     uint256 public currentRound;
     uint256 private _nextTicketId = 1;
     mapping(uint256 => Round) public rounds;
     mapping(uint256 => uint256) public requestIdToRound;
 
-    VRFCoordinatorV2Interface public immutable vrfCoordinator;
     bytes32 public keyHash;
-    uint64 public vrfSubscriptionId;
+    uint256 public vrfSubscriptionId;
     uint16 public constant REQUEST_CONFIRMATIONS = 3;
     uint32 public constant CALLBACK_GAS_LIMIT = 200_000;
 
     event RoundStarted(uint256 indexed roundId, uint256 startTime, uint256 endTime);
     event TicketPurchased(uint256 indexed roundId, uint256 indexed ticketId, address indexed buyer, uint256 price);
     event PoolDonated(uint256 indexed roundId, address indexed from, uint256 amount);
-    event DrawRequested(uint256 indexed roundId, uint256 requestId);
+    event ComplianceRegistrySet(address indexed registry);
+    event DrawRequested(uint256 indexed roundId, uint256 requestId, bool isRetry);
     event WinnerDrawn(uint256 indexed roundId, uint256 indexed winnerTicketId, address winner);
     event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 payout, uint256 fee);
+    event UnclaimedPrizeSwept(uint256 indexed roundId, uint256 amount);
+    event FeesWithdrawn(address indexed to, uint256 amount);
 
     constructor(
-        address initialOwner,
         address _vrfCoordinator,
         address _paymentToken,
+        address _complianceRegistry,
         bytes32 _keyHash,
-        uint64 _vrfSubscriptionId,
+        uint256 _vrfSubscriptionId,
         uint256 _basePrice,
         uint256 _priceIncrement,
         uint256 _roundDuration,
         address _feeRecipient
-    )
-        ERC721("Decentralized Lottery Ticket", "DLOT")
-        Ownable(initialOwner)
-        VRFConsumerBaseV2(_vrfCoordinator)
-    {
+    ) ERC721("Decentralized Lottery Ticket", "DLOT") VRFConsumerBaseV2Plus(_vrfCoordinator) {
         require(_paymentToken != address(0), "zero payment token");
+        require(_complianceRegistry != address(0), "zero compliance registry");
+        require(_feeRecipient != address(0), "zero fee recipient");
+
         paymentToken = IERC20(_paymentToken);
-        vrfCoordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
+        complianceRegistry = IComplianceRegistry(_complianceRegistry);
         keyHash = _keyHash;
         vrfSubscriptionId = _vrfSubscriptionId;
         basePrice = _basePrice;
@@ -98,7 +122,11 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
 
     /// @param maxPrice Cap on what the buyer is willing to pay — protects against
     /// the price rising between quoting and the transaction landing.
-    function buyTicket(uint256 maxPrice) external nonReentrant returns (uint256 ticketId) {
+    function buyTicket(uint256 maxPrice) external nonReentrant whenNotPaused returns (uint256 ticketId) {
+        // Also enforced in _update for every transfer; checked here so an
+        // unverified buyer gets a clear reason rather than a transfer failure.
+        require(complianceRegistry.isAllowed(msg.sender), "compliance: not verified");
+
         Round storage round = rounds[currentRound];
         require(block.timestamp < round.endTime, "round closed");
 
@@ -118,76 +146,132 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
     /// @notice Adds USDC to the current round's prize pool without minting a
     /// ticket. Used by TicketMarket to route a share of resale fees into the
     /// pool; open to anyone (a donation only ever benefits ticket holders).
-    /// If the current round has already paid out (between settlement and the
-    /// next round opening), the amount goes to the fee recipient instead so
-    /// funds can never be stranded in a closed round.
+    /// If the current round is already settled, the amount is treated as
+    /// platform revenue so funds can never be stranded in a closed round.
     function donateToPool(uint256 amount) external nonReentrant {
         require(amount > 0, "zero amount");
+        paymentToken.safeTransferFrom(msg.sender, address(this), amount);
+
         Round storage round = rounds[currentRound];
-        if (round.paid) {
-            paymentToken.safeTransferFrom(msg.sender, feeRecipient, amount);
+        if (round.drawn) {
+            accruedFees += amount;
         } else {
-            paymentToken.safeTransferFrom(msg.sender, address(this), amount);
             round.pool += amount;
             emit PoolDonated(currentRound, msg.sender, amount);
         }
     }
 
-    /// @notice Permissionless: anyone can trigger the draw once a round's window has closed.
-    function requestDraw() external returns (uint256 requestId) {
+    /// @notice Permissionless: anyone can trigger the draw once a round's window
+    /// has closed. Retryable — if Chainlink accepts a request but the callback
+    /// never lands (subscription out of funds, callback gas too low, coordinator
+    /// incident), the round would otherwise be stuck and its pool locked
+    /// forever. After `drawRetryTimeout` the request can be reissued.
+    function requestDraw() external nonReentrant returns (uint256 requestId) {
         Round storage round = rounds[currentRound];
         require(block.timestamp >= round.endTime, "round still open");
         require(round.ticketsSold > 0, "no tickets sold");
-        require(round.vrfRequestId == 0, "draw already requested");
+        require(!round.drawn, "already drawn");
 
-        requestId = vrfCoordinator.requestRandomWords(
-            keyHash,
-            vrfSubscriptionId,
-            REQUEST_CONFIRMATIONS,
-            CALLBACK_GAS_LIMIT,
-            1
+        bool isRetry = round.vrfRequestId != 0;
+        require(
+            !isRetry || block.timestamp >= round.drawRequestedAt + drawRetryTimeout,
+            "draw pending, retry later"
+        );
+
+        requestId = s_vrfCoordinator.requestRandomWords(
+            VRFV2PlusClient.RandomWordsRequest({
+                keyHash: keyHash,
+                subId: vrfSubscriptionId,
+                requestConfirmations: REQUEST_CONFIRMATIONS,
+                callbackGasLimit: CALLBACK_GAS_LIMIT,
+                numWords: 1,
+                extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: false}))
+            })
         );
 
         round.vrfRequestId = requestId;
+        round.drawRequestedAt = uint64(block.timestamp);
         requestIdToRound[requestId] = currentRound;
-        emit DrawRequested(currentRound, requestId);
+        emit DrawRequested(currentRound, requestId, isRetry);
     }
 
-    function fulfillRandomWords(uint256 requestId, uint256[] memory randomWords) internal override {
+    /// @dev Never reverts on a duplicate. After a retry the original request may
+    /// still be fulfilled later; reverting would make Chainlink's callback fail
+    /// and burn the subscription's gas for nothing. First fulfilment wins.
+    function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) internal override {
         uint256 roundId = requestIdToRound[requestId];
+        if (roundId == 0) return;
+
         Round storage round = rounds[roundId];
-        require(!round.drawn, "already drawn");
+        if (round.drawn) return;
 
         uint256 winnerIndex = randomWords[0] % round.ticketsSold;
         round.winnerTicketId = round.firstTicketId + winnerIndex;
         round.drawn = true;
+        round.drawnAt = uint64(block.timestamp);
 
         emit WinnerDrawn(roundId, round.winnerTicketId, ownerOf(round.winnerTicketId));
     }
 
+    /// @notice Not pausable — a player must always be able to take their money
+    /// out, even while the rest of the platform is halted.
     function claimPrize(uint256 roundId) external nonReentrant {
         Round storage round = rounds[roundId];
         require(round.drawn, "not drawn yet");
         require(!round.paid, "already paid");
+        require(!round.swept, "claim window closed");
 
         address winner = ownerOf(round.winnerTicketId);
         require(msg.sender == winner, "not the winning ticket holder");
+        // Holders are verified at acquisition, but a verification can lapse or be
+        // revoked afterwards. Withhold the payout until they are current again —
+        // the funds stay escrowed in the round, they are not lost. `canClaim`
+        // rather than `isAllowed` so self-exclusion stops further play without
+        // confiscating winnings the player already holds.
+        require(complianceRegistry.canClaim(winner), "compliance: winner not verified");
 
         round.paid = true;
 
         uint256 fee = (round.pool * PLATFORM_FEE_BPS) / BPS_DENOMINATOR;
         uint256 payout = round.pool - fee;
 
-        paymentToken.safeTransfer(feeRecipient, fee);
+        accruedFees += fee;
         paymentToken.safeTransfer(winner, payout);
 
         emit PrizeClaimed(roundId, winner, payout, fee);
     }
 
-    /// @notice Opens the next round. Requires the previous round to be fully settled.
+    /// @notice Sweeps a prize nobody claimed within the window. Permissionless
+    /// so the platform can't be held hostage by an inactive operator either.
+    function sweepUnclaimed(uint256 roundId) external nonReentrant {
+        Round storage round = rounds[roundId];
+        require(round.drawn, "not drawn yet");
+        require(!round.paid, "already paid");
+        require(!round.swept, "already swept");
+        require(block.timestamp >= round.drawnAt + claimWindow, "claim window still open");
+
+        round.swept = true;
+        uint256 amount = round.pool;
+        accruedFees += amount;
+
+        emit UnclaimedPrizeSwept(roundId, amount);
+    }
+
+    function withdrawFees() external nonReentrant {
+        uint256 amount = accruedFees;
+        require(amount > 0, "nothing to withdraw");
+        accruedFees = 0;
+        paymentToken.safeTransfer(feeRecipient, amount);
+        emit FeesWithdrawn(feeRecipient, amount);
+    }
+
+    /// @notice Opens the next round. Only needs the previous round *drawn*, not
+    /// claimed — otherwise one winner who never claims (lost keys, lost interest)
+    /// would halt the platform permanently. They can still claim from the old
+    /// round for the whole claim window.
     function startNewRound() external onlyOwner {
         Round storage prev = rounds[currentRound];
-        require(prev.ticketsSold == 0 || prev.paid, "previous round unsettled");
+        require(prev.ticketsSold == 0 || prev.drawn, "previous round not drawn");
 
         currentRound += 1;
         Round storage round = rounds[currentRound];
@@ -196,6 +280,16 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
         round.firstTicketId = _nextTicketId;
 
         emit RoundStarted(currentRound, round.startTime, round.endTime);
+    }
+
+    // --- owner controls ---------------------------------------------------
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 
     function setPricing(uint256 _basePrice, uint256 _priceIncrement) external onlyOwner {
@@ -212,8 +306,41 @@ contract LotteryTicket is ERC721Enumerable, Ownable, ReentrancyGuard, VRFConsume
         feeRecipient = _feeRecipient;
     }
 
-    function setVrfConfig(bytes32 _keyHash, uint64 _vrfSubscriptionId) external onlyOwner {
+    function setVrfConfig(bytes32 _keyHash, uint256 _vrfSubscriptionId) external onlyOwner {
         keyHash = _keyHash;
         vrfSubscriptionId = _vrfSubscriptionId;
+    }
+
+    function setComplianceRegistry(address _complianceRegistry) external onlyOwner {
+        require(_complianceRegistry != address(0), "zero compliance registry");
+        complianceRegistry = IComplianceRegistry(_complianceRegistry);
+        emit ComplianceRegistrySet(_complianceRegistry);
+    }
+
+    function setClaimWindow(uint256 _claimWindow) external onlyOwner {
+        require(_claimWindow >= 7 days, "claim window too short");
+        claimWindow = _claimWindow;
+    }
+
+    function setDrawRetryTimeout(uint256 _drawRetryTimeout) external onlyOwner {
+        require(_drawRetryTimeout >= 5 minutes, "retry timeout too short");
+        drawRetryTimeout = _drawRetryTimeout;
+    }
+
+    // --- internals --------------------------------------------------------
+
+    /// @dev Compliance is enforced at the token level, not just in buyTicket:
+    /// a raw ERC721 transferFrom would otherwise move a ticket to an
+    /// unverified or blocked address and bypass the gate entirely. Burns
+    /// (to == 0) are exempt so tickets are never permanently stuck.
+    function _update(
+        address to,
+        uint256 tokenId,
+        address auth
+    ) internal override(ERC721Enumerable) returns (address) {
+        if (to != address(0)) {
+            require(complianceRegistry.isAllowed(to), "compliance: recipient not verified");
+        }
+        return super._update(to, tokenId, auth);
     }
 }

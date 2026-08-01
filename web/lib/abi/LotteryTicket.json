@@ -3,11 +3,6 @@
     "inputs": [
       {
         "internalType": "address",
-        "name": "initialOwner",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
         "name": "_vrfCoordinator",
         "type": "address"
       },
@@ -17,14 +12,19 @@
         "type": "address"
       },
       {
+        "internalType": "address",
+        "name": "_complianceRegistry",
+        "type": "address"
+      },
+      {
         "internalType": "bytes32",
         "name": "_keyHash",
         "type": "bytes32"
       },
       {
-        "internalType": "uint64",
+        "internalType": "uint256",
         "name": "_vrfSubscriptionId",
-        "type": "uint64"
+        "type": "uint256"
       },
       {
         "internalType": "uint256",
@@ -175,6 +175,16 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "EnforcedPause",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ExpectedPause",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -194,22 +204,21 @@
     "inputs": [
       {
         "internalType": "address",
-        "name": "owner",
+        "name": "have",
         "type": "address"
-      }
-    ],
-    "name": "OwnableInvalidOwner",
-    "type": "error"
-  },
-  {
-    "inputs": [
+      },
       {
         "internalType": "address",
-        "name": "account",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "coordinator",
         "type": "address"
       }
     ],
-    "name": "OwnableUnauthorizedAccount",
+    "name": "OnlyOwnerOrCoordinator",
     "type": "error"
   },
   {
@@ -226,6 +235,11 @@
       }
     ],
     "name": "SafeERC20FailedOperation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
     "type": "error"
   },
   {
@@ -283,6 +297,32 @@
     "inputs": [
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "registry",
+        "type": "address"
+      }
+    ],
+    "name": "ComplianceRegistrySet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "vrfCoordinator",
+        "type": "address"
+      }
+    ],
+    "name": "CoordinatorSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "uint256",
         "name": "roundId",
         "type": "uint256"
@@ -292,6 +332,12 @@
         "internalType": "uint256",
         "name": "requestId",
         "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "isRetry",
+        "type": "bool"
       }
     ],
     "name": "DrawRequested",
@@ -303,17 +349,68 @@
       {
         "indexed": true,
         "internalType": "address",
-        "name": "previousOwner",
+        "name": "to",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "FeesWithdrawn",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "from",
         "type": "address"
       },
       {
         "indexed": true,
         "internalType": "address",
-        "name": "newOwner",
+        "name": "to",
+        "type": "address"
+      }
+    ],
+    "name": "OwnershipTransferRequested",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "from",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "to",
         "type": "address"
       }
     ],
     "name": "OwnershipTransferred",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "Paused",
     "type": "event"
   },
   {
@@ -463,6 +560,38 @@
         "type": "uint256"
       },
       {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "UnclaimedPrizeSwept",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "Unpaused",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "roundId",
+        "type": "uint256"
+      },
+      {
         "indexed": true,
         "internalType": "uint256",
         "name": "winnerTicketId",
@@ -525,6 +654,26 @@
         "internalType": "uint16",
         "name": "",
         "type": "uint16"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "acceptOwnership",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "accruedFees",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -614,6 +763,32 @@
   },
   {
     "inputs": [],
+    "name": "claimWindow",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "complianceRegistry",
+    "outputs": [
+      {
+        "internalType": "contract IComplianceRegistry",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "currentRound",
     "outputs": [
       {
@@ -636,6 +811,19 @@
     "name": "donateToPool",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "drawRetryTimeout",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -773,6 +961,26 @@
   },
   {
     "inputs": [],
+    "name": "pause",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "paused",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "paymentToken",
     "outputs": [
       {
@@ -811,13 +1019,6 @@
       }
     ],
     "name": "rawFulfillRandomWords",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "renounceOwnership",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -913,6 +1114,16 @@
         "type": "uint256"
       },
       {
+        "internalType": "uint64",
+        "name": "drawRequestedAt",
+        "type": "uint64"
+      },
+      {
+        "internalType": "uint64",
+        "name": "drawnAt",
+        "type": "uint64"
+      },
+      {
         "internalType": "bool",
         "name": "drawn",
         "type": "bool"
@@ -921,6 +1132,24 @@
         "internalType": "bool",
         "name": "paid",
         "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "swept",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "s_vrfCoordinator",
+    "outputs": [
+      {
+        "internalType": "contract IVRFCoordinatorV2Plus",
+        "name": "",
+        "type": "address"
       }
     ],
     "stateMutability": "view",
@@ -998,6 +1227,58 @@
   {
     "inputs": [
       {
+        "internalType": "uint256",
+        "name": "_claimWindow",
+        "type": "uint256"
+      }
+    ],
+    "name": "setClaimWindow",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_complianceRegistry",
+        "type": "address"
+      }
+    ],
+    "name": "setComplianceRegistry",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_vrfCoordinator",
+        "type": "address"
+      }
+    ],
+    "name": "setCoordinator",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_drawRetryTimeout",
+        "type": "uint256"
+      }
+    ],
+    "name": "setDrawRetryTimeout",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "_feeRecipient",
         "type": "address"
@@ -1047,9 +1328,9 @@
         "type": "bytes32"
       },
       {
-        "internalType": "uint64",
+        "internalType": "uint256",
         "name": "_vrfSubscriptionId",
-        "type": "uint64"
+        "type": "uint256"
       }
     ],
     "name": "setVrfConfig",
@@ -1081,6 +1362,19 @@
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "roundId",
+        "type": "uint256"
+      }
+    ],
+    "name": "sweepUnclaimed",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1198,7 +1492,7 @@
     "inputs": [
       {
         "internalType": "address",
-        "name": "newOwner",
+        "name": "to",
         "type": "address"
       }
     ],
@@ -1209,15 +1503,9 @@
   },
   {
     "inputs": [],
-    "name": "vrfCoordinator",
-    "outputs": [
-      {
-        "internalType": "contract VRFCoordinatorV2Interface",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
+    "name": "unpause",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1225,12 +1513,19 @@
     "name": "vrfSubscriptionId",
     "outputs": [
       {
-        "internalType": "uint64",
+        "internalType": "uint256",
         "name": "",
-        "type": "uint64"
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "withdrawFees",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   }
 ]

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contracts:
+    name: Contracts — compile, test, static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run compile --workspace contracts
+      - run: npm test --workspace contracts
+
+      # Cheap findings before paying an auditor to find them.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install slither-analyzer
+      - name: Slither
+        working-directory: contracts
+        # Fails the build on high/medium severity only; the informational
+        # detectors (timestamp use, naming) are noisy for a time-based lottery.
+        run: slither . --exclude-dependencies --filter-paths "node_modules|contracts/mocks" --fail-high --fail-medium
+
+  web:
+    name: Web — typecheck, lint, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+        working-directory: web
+      - run: npm run lint --workspace web
+      - run: npm run build --workspace web
+        env:
+          NEXT_PUBLIC_CHAIN_ID: "31337"
