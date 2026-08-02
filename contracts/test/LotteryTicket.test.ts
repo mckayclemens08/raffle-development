@@ -7,7 +7,7 @@ import {
   drawRound,
   fundAndApprove,
   BASE_PRICE,
-  PRICE_INCREMENT,
+  priceAfter,
   ROUND_DURATION,
   USDC,
 } from "./helpers";
@@ -31,11 +31,12 @@ describe("LotteryTicket", () => {
 
     await fundAndApprove(usdc, alice, lotteryAddress, BASE_PRICE);
     await lottery.connect(alice).buyTicket(BASE_PRICE);
-    expect(await lottery.getCurrentPrice(1)).to.equal(BASE_PRICE + PRICE_INCREMENT);
+    expect(await lottery.getCurrentPrice(1)).to.equal(priceAfter(1));
 
-    await fundAndApprove(usdc, bob, lotteryAddress, BASE_PRICE + PRICE_INCREMENT);
-    await lottery.connect(bob).buyTicket(BASE_PRICE + PRICE_INCREMENT);
-    expect(await lottery.getCurrentPrice(1)).to.equal(BASE_PRICE + PRICE_INCREMENT * 2n);
+    await fundAndApprove(usdc, bob, lotteryAddress, priceAfter(1));
+    await lottery.connect(bob).buyTicket(priceAfter(1));
+    // Compounding, not linear: the second step is taken on the raised price.
+    expect(await lottery.getCurrentPrice(1)).to.equal(priceAfter(2));
   });
 
   it("rejects a purchase when the price has risen above maxPrice", async () => {
@@ -80,12 +81,12 @@ describe("LotteryTicket", () => {
     // 3 tickets sold at increasing prices
     await fundAndApprove(usdc, alice, lotteryAddress, BASE_PRICE);
     await lottery.connect(alice).buyTicket(BASE_PRICE);
-    await fundAndApprove(usdc, bob, lotteryAddress, BASE_PRICE + PRICE_INCREMENT);
-    await lottery.connect(bob).buyTicket(BASE_PRICE + PRICE_INCREMENT);
-    await fundAndApprove(usdc, carol, lotteryAddress, BASE_PRICE + PRICE_INCREMENT * 2n);
-    await lottery.connect(carol).buyTicket(BASE_PRICE + PRICE_INCREMENT * 2n);
+    await fundAndApprove(usdc, bob, lotteryAddress, priceAfter(1));
+    await lottery.connect(bob).buyTicket(priceAfter(1));
+    await fundAndApprove(usdc, carol, lotteryAddress, priceAfter(2));
+    await lottery.connect(carol).buyTicket(priceAfter(2));
 
-    const pool = BASE_PRICE * 3n + PRICE_INCREMENT * 3n;
+    const pool = priceAfter(0) + priceAfter(1) + priceAfter(2);
     const round = await lottery.rounds(1);
     expect(round.pool).to.equal(pool);
     expect(await usdc.balanceOf(lotteryAddress)).to.equal(pool);

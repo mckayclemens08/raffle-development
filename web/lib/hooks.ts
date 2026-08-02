@@ -123,6 +123,28 @@ export function useUsdcBalance() {
   return { balance: balance as bigint | undefined, refetch };
 }
 
+/// Beta faucet: mints test dollars to the connected wallet. Only works against
+/// MockUSDC, whose `mint` is intentionally open — a real stablecoin has no such
+/// function and the UI hides the button entirely.
+export function useTestFaucet() {
+  const { address } = useAccount();
+  const { data: hash, writeContract, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  function mint(amountUsd = 500) {
+    if (!address) return;
+    writeContract({
+      address: USDC_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: "mint",
+      args: [address, BigInt(Math.round(amountUsd * 1_000_000))],
+      chainId: TARGET_CHAIN_ID,
+    });
+  }
+
+  return { mint, isPending, isConfirming, isSuccess, error, hash };
+}
+
 /// Accrued fee balances and the pause switch, for the admin dashboard.
 export function useTreasury() {
   const { data, refetch } = useReadContracts({
@@ -621,7 +643,7 @@ export function useMarketAdminAction() {
 export function useAdminSettings() {
   const contracts = [
     { address: LOTTERY_ADDRESS, abi: LOTTERY_ABI, functionName: "basePrice", chainId: TARGET_CHAIN_ID },
-    { address: LOTTERY_ADDRESS, abi: LOTTERY_ABI, functionName: "priceIncrement", chainId: TARGET_CHAIN_ID },
+    { address: LOTTERY_ADDRESS, abi: LOTTERY_ABI, functionName: "priceIncrementBps", chainId: TARGET_CHAIN_ID },
     { address: LOTTERY_ADDRESS, abi: LOTTERY_ABI, functionName: "roundDuration", chainId: TARGET_CHAIN_ID },
     { address: LOTTERY_ADDRESS, abi: LOTTERY_ABI, functionName: "feeRecipient", chainId: TARGET_CHAIN_ID },
     { address: LOTTERY_ADDRESS, abi: LOTTERY_ABI, functionName: "keyHash", chainId: TARGET_CHAIN_ID },
@@ -634,12 +656,12 @@ export function useAdminSettings() {
     query: { enabled: Boolean(LOTTERY_ADDRESS) && Boolean(MARKET_ADDRESS) },
   });
 
-  const [basePrice, priceIncrement, roundDuration, feeRecipient, keyHash, vrfSubscriptionId, marketFeeRecipient] =
+  const [basePrice, priceIncrementBps, roundDuration, feeRecipient, keyHash, vrfSubscriptionId, marketFeeRecipient] =
     data ?? [];
 
   return {
     basePrice: basePrice?.result as bigint | undefined,
-    priceIncrement: priceIncrement?.result as bigint | undefined,
+    priceIncrementBps: priceIncrementBps?.result as bigint | undefined,
     roundDuration: roundDuration?.result as bigint | undefined,
     feeRecipient: feeRecipient?.result as `0x${string}` | undefined,
     keyHash: keyHash?.result as `0x${string}` | undefined,

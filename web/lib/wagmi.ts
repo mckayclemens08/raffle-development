@@ -1,7 +1,7 @@
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
 import { base, metaMaskWallet, rainbowWallet, walletConnectWallet } from "@rainbow-me/rainbowkit/wallets";
 import { createConfig, fallback, http } from "wagmi";
-import { hardhat, sepolia } from "wagmi/chains";
+import { baseSepolia, hardhat, sepolia } from "wagmi/chains";
 import { DEV_WALLETS_ENABLED, devWalletConnectors } from "./devWallets";
 
 /// Our own node first, a public endpoint behind it.
@@ -33,7 +33,11 @@ function transportFor() {
 // Drop it once the app only targets deployed testnet/mainnet contracts.
 // In dev-wallet mode hardhat goes first so any request that falls back to
 // `chains[0]` still resolves to the local node rather than a public RPC.
-const chains = DEV_WALLETS_ENABLED ? ([hardhat, sepolia] as const) : ([sepolia, hardhat] as const);
+// baseSepolia is the beta target — it's Base's testnet, so the Coinbase passkey
+// wallet we feature works natively there.
+const chains = DEV_WALLETS_ENABLED
+  ? ([hardhat, baseSepolia, sepolia] as const)
+  : ([baseSepolia, sepolia, hardhat] as const);
 
 const walletConnectors = connectorsForWallets(
   [
@@ -65,6 +69,7 @@ export const wagmiConfig = createConfig({
     // Local dev always talks to the hardhat node directly; only the public
     // chain benefits from the failover chain.
     [hardhat.id]: http(),
+    [baseSepolia.id]: transportFor(),
     [sepolia.id]: transportFor(),
   },
   ssr: true,

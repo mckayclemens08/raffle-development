@@ -33,7 +33,7 @@
       },
       {
         "internalType": "uint256",
-        "name": "_priceIncrement",
+        "name": "_priceIncrementBps",
         "type": "uint256"
       },
       {
@@ -929,6 +929,19 @@
   },
   {
     "inputs": [],
+    "name": "maxTicketPrice",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "name",
     "outputs": [
       {
@@ -1007,7 +1020,7 @@
   },
   {
     "inputs": [],
-    "name": "priceIncrement",
+    "name": "priceIncrementBps",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1099,6 +1112,11 @@
       {
         "internalType": "uint256",
         "name": "endTime",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "currentPrice",
         "type": "uint256"
       },
       {
@@ -1305,6 +1323,19 @@
   {
     "inputs": [
       {
+        "internalType": "uint256",
+        "name": "_maxTicketPrice",
+        "type": "uint256"
+      }
+    ],
+    "name": "setMaxTicketPrice",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "_paymentToken",
         "type": "address"
@@ -1324,7 +1355,7 @@
       },
       {
         "internalType": "uint256",
-        "name": "_priceIncrement",
+        "name": "_priceIncrementBps",
         "type": "uint256"
       }
     ],

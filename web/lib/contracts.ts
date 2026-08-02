@@ -11,6 +11,16 @@ export const USDC_ADDRESS = (process.env.NEXT_PUBLIC_USDC_ADDRESS || "") as `0x$
 export const COMPLIANCE_ADDRESS = (process.env.NEXT_PUBLIC_COMPLIANCE_ADDRESS || "") as `0x${string}`;
 export const TARGET_CHAIN_ID = Number(process.env.NEXT_PUBLIC_CHAIN_ID || 11155111);
 
+/// Beta only: the deploy script sets this when it deployed a mintable mock
+/// token. Against a real stablecoin there is nothing to mint, so the faucet
+/// UI stays hidden.
+export const FAUCET_ENABLED = process.env.NEXT_PUBLIC_FAUCET_ENABLED === "true";
+
+/// Anything that isn't Ethereum or Base mainnet is a test deployment. Derived
+/// from the chain id rather than a separate flag, so it can't be forgotten:
+/// a beta build always announces itself.
+export const BETA_MODE = ![1, 8453].includes(TARGET_CHAIN_ID);
+
 export const LOTTERY_ABI = lotteryAbi as Abi;
 export const MARKET_ABI = marketAbi as Abi;
 export const ERC20_ABI = erc20Abi as Abi;

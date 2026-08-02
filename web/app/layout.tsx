@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 import { Header } from "@/components/Header";
+import { BetaBanner } from "@/components/BetaBanner";
 import { SessionGuard } from "@/components/SessionGuard";
 import { SiteFooter } from "@/components/SiteFooter";
 
@@ -33,6 +34,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-white text-neutral-900">
         <Providers>
+          <BetaBanner />
           <Header />
           <main className="flex-1">{children}</main>
           <SiteFooter />

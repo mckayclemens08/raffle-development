@@ -8,6 +8,7 @@ import { formatUsdc, LOTTERY_ADDRESS } from "@/lib/contracts";
 import { LiveChartCard } from "@/components/LiveChartCard";
 import { type ChartPoint } from "@/components/LineAreaChart";
 import { ComplianceGate } from "@/components/ComplianceGate";
+import { TestFaucet } from "@/components/TestFaucet";
 import { useNow } from "@/lib/useNow";
 
 function formatAxisUsd(value: number): string {
@@ -142,6 +143,10 @@ export default function Home() {
                 </div>
 
                 <div className="mt-6">
+                  <TestFaucet />
+                </div>
+
+                <div className="mt-4">
                   <ComplianceGate connected={isConnected}>
                 <button
                   className="w-full rounded-xl bg-blue-600 px-4 py-3.5 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"

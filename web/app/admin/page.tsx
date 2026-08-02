@@ -173,21 +173,23 @@ function RoundOverview() {
   );
 }
 
-function PricingForm({ basePrice, priceIncrement }: { basePrice: bigint; priceIncrement: bigint }) {
+function PricingForm({ basePrice, priceIncrementBps }: { basePrice: bigint; priceIncrementBps: bigint }) {
   const [base, setBase] = useState(formatUsdc(basePrice).replace(/,/g, ""));
-  const [increment, setIncrement] = useState(formatUsdc(priceIncrement).replace(/,/g, ""));
+  const [increment, setIncrement] = useState((Number(priceIncrementBps) / 100).toString());
   const action = useLotteryAdminAction();
 
   return (
     <Card title="Ticket pricing" description="Base price for a fresh round, and how much each sale bumps the next ticket. All amounts in USD (USDC).">
       <div className="grid gap-4 sm:grid-cols-2">
         <TextField label="Base price (USD)" value={base} onChange={setBase} />
-        <TextField label="Price increment (USD)" value={increment} onChange={setIncrement} />
+        <TextField label="Price rise per sale (%)" value={increment} onChange={setIncrement} />
       </div>
       <button
         className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
         disabled={action.isPending || action.isConfirming}
-        onClick={() => action.run("setPricing", [parseUsdc(base || "0"), parseUsdc(increment || "0")])}
+        onClick={() =>
+          action.run("setPricing", [parseUsdc(base || "0"), BigInt(Math.round(Number(increment || "0") * 100))])
+        }
       >
         Save pricing
       </button>
@@ -308,8 +310,8 @@ export default function AdminPage() {
       <div className="mt-8 flex flex-col gap-6">
         <RoundOverview />
 
-        {settings.basePrice !== undefined && settings.priceIncrement !== undefined && (
-          <PricingForm basePrice={settings.basePrice} priceIncrement={settings.priceIncrement} />
+        {settings.basePrice !== undefined && settings.priceIncrementBps !== undefined && (
+          <PricingForm basePrice={settings.basePrice} priceIncrementBps={settings.priceIncrementBps} />
         )}
 
         {settings.roundDuration !== undefined && <RoundDurationForm roundDuration={settings.roundDuration} />}

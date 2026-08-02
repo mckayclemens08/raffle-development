@@ -5,7 +5,8 @@ with demand inside a round; the winner is drawn with Chainlink VRF and paid from
 
 - `contracts/` — Solidity (Hardhat 2, ethers v6), Chainlink VRF 2.5
 - `web/` — Next.js 16, wagmi + RainbowKit, passkey wallet featured for no-install signup
-- `docs/` — [operations runbooks](docs/operations.md) and [compliance](docs/compliance.md)
+- `docs/` — [beta deployment](docs/beta.md), [operations runbooks](docs/operations.md),
+  [compliance](docs/compliance.md)
 
 > **Not licensed, not audited, not handling real money.** See
 > [what's still missing](docs/compliance.md#what-is-not-production-ready) before going anywhere near
@@ -89,11 +90,20 @@ cd contracts && slither . --exclude-dependencies \
 | `/admin` | Owner only: draws, rounds, treasury, pause, compliance |
 | `/rules`, `/terms`, `/privacy` | Published game rules and policies |
 
-## Deploying to a testnet
+## Deploying for beta
 
-Copy `contracts/.env.example` to `contracts/.env` and fill in an RPC URL, a funded deployer key and
-a real Chainlink VRF subscription. Then write a `scripts/deploy.ts` following `deploy-local.ts`,
-passing the chain's canonical USDC address instead of deploying a mock.
+Full walkthrough in **[docs/beta.md](docs/beta.md)** — Base Sepolia, Vercel, and handing admin
+ownership to your own wallet. The short version:
 
-Read [operations](docs/operations.md) first — self-hosted RPC, the keeper, and the runbooks for
-swapping the randomness oracle or the settlement token all matter more once real value is at stake.
+```bash
+cd contracts
+cp .env.example .env    # PRIVATE_KEY (throwaway), ADMIN_ADDRESS (your real wallet)
+npx hardhat run scripts/deploy-testnet.ts --network baseSepolia
+npx hardhat run scripts/accept-ownership.ts --network baseSepolia   # from the admin wallet
+```
+
+The deploy prints the exact environment variables to paste into Vercel. Point Vercel's root
+directory at `web/`, and make sure `NEXT_PUBLIC_DEV_WALLETS=false`.
+
+Read [operations](docs/operations.md) before there's real value at stake — self-hosted RPC, the
+keeper, and the runbooks for swapping the randomness oracle or the settlement token.

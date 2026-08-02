@@ -34,6 +34,10 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
     struct Round {
         uint256 startTime;
         uint256 endTime;
+        /// @dev The price the *next* ticket in this round costs. Stored and
+        /// stepped on each sale rather than recomputed, so percentage growth
+        /// costs the same gas at ticket 5 as at ticket 5,000.
+        uint256 currentPrice;
         uint256 firstTicketId;
         uint256 ticketsSold;
         uint256 pool;
@@ -53,7 +57,16 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
     IERC20 public paymentToken;
     IComplianceRegistry public complianceRegistry;
     uint256 public basePrice;
-    uint256 public priceIncrement;
+
+    /// @notice How much each sale raises the price, in basis points of the
+    /// current price (100 = 1%). Growth compounds, so it is exponential:
+    /// at 2% a $1 ticket is $7.24 by the 100th sale and $52 by the 200th.
+    uint256 public priceIncrementBps;
+
+    /// @notice Ceiling on the ticket price; 0 disables it. Exponential growth
+    /// runs away at high volume, and a lottery whose tickets cost hundreds of
+    /// dollars has priced out the people it was built for.
+    uint256 public maxTicketPrice;
     uint256 public roundDuration;
     address public feeRecipient;
 
@@ -104,7 +117,7 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         bytes32 _keyHash,
         uint256 _vrfSubscriptionId,
         uint256 _basePrice,
-        uint256 _priceIncrement,
+        uint256 _priceIncrementBps,
         uint256 _roundDuration,
         address _feeRecipient
     ) ERC721("Decentralized Lottery Ticket", "DLOT") VRFConsumerBaseV2Plus(_vrfCoordinator) {
@@ -116,8 +129,9 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         complianceRegistry = IComplianceRegistry(_complianceRegistry);
         keyHash = _keyHash;
         vrfSubscriptionId = _vrfSubscriptionId;
+        require(_basePrice > 0, "zero base price");
         basePrice = _basePrice;
-        priceIncrement = _priceIncrement;
+        priceIncrementBps = _priceIncrementBps;
         roundDuration = _roundDuration;
         feeRecipient = _feeRecipient;
 
@@ -125,12 +139,16 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         rounds[1].startTime = block.timestamp;
         rounds[1].endTime = block.timestamp + _roundDuration;
         rounds[1].firstTicketId = _nextTicketId;
+        rounds[1].currentPrice = _basePrice;
         emit RoundStarted(1, block.timestamp, rounds[1].endTime);
     }
 
-    /// @notice Price rises linearly with tickets already sold in the round.
+    /// @notice What the next ticket in this round costs.
+    /// @dev Falls back to basePrice for a round that was never opened, so the
+    /// UI shows a sensible figure rather than $0.
     function getCurrentPrice(uint256 roundId) public view returns (uint256) {
-        return basePrice + (rounds[roundId].ticketsSold * priceIncrement);
+        uint256 stored = rounds[roundId].currentPrice;
+        return stored == 0 ? basePrice : stored;
     }
 
     /// @param maxPrice Cap on what the buyer is willing to pay — protects against
@@ -150,6 +168,13 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         round.ticketsSold += 1;
         round.pool += price;
         totalEscrowed += price;
+
+        // Step the price for the next buyer. Integer division rounds the
+        // increment down, so a percentage too small to move the price at this
+        // magnitude simply leaves it flat rather than reverting.
+        uint256 next = price + ((price * priceIncrementBps) / BPS_DENOMINATOR);
+        if (maxTicketPrice != 0 && next > maxTicketPrice) next = maxTicketPrice;
+        round.currentPrice = next;
 
         paymentToken.safeTransferFrom(msg.sender, address(this), price);
 
@@ -299,6 +324,9 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         round.startTime = block.timestamp;
         round.endTime = block.timestamp + roundDuration;
         round.firstTicketId = _nextTicketId;
+        // Picks up any basePrice change made since the last round — pricing
+        // never shifts under players mid-round.
+        round.currentPrice = basePrice;
 
         emit RoundStarted(currentRound, round.startTime, round.endTime);
     }
@@ -313,9 +341,18 @@ contract LotteryTicket is ERC721Enumerable, Pausable, ReentrancyGuard, VRFConsum
         _unpause();
     }
 
-    function setPricing(uint256 _basePrice, uint256 _priceIncrement) external onlyOwner {
+    /// @notice Sets the opening price and the per-sale growth rate.
+    /// @dev Takes effect from the next round. The open round keeps the price
+    /// curve players bought into, which is the honest behaviour.
+    function setPricing(uint256 _basePrice, uint256 _priceIncrementBps) external onlyOwner {
+        require(_basePrice > 0, "zero base price");
         basePrice = _basePrice;
-        priceIncrement = _priceIncrement;
+        priceIncrementBps = _priceIncrementBps;
+    }
+
+    /// @param _maxTicketPrice 0 removes the ceiling.
+    function setMaxTicketPrice(uint256 _maxTicketPrice) external onlyOwner {
+        maxTicketPrice = _maxTicketPrice;
     }
 
     function setRoundDuration(uint256 _roundDuration) external onlyOwner {
